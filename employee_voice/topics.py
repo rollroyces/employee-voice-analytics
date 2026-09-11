@@ -57,12 +57,24 @@ def _try_bertopic(texts: List[str]) -> pd.DataFrame | None:
 
 def _tfidf_kmeans(texts: List[str], k: int = 5) -> pd.DataFrame:
     from sklearn.cluster import KMeans
-    from sklearn.decomposition import TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
 
-    vec = TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_df=0.95,
+    # With very small corpora sklearn's TfidfVectorizer rejects
+    # `max_df < 1` because the absolute document count that `max_df`
+    # resolves to can fall below `min_df`. Loosen max_df when the
+    # corpus is tiny so a single row doesn't crash the pipeline.
+    max_df = 0.95 if len(texts) >= 5 else 1.0
+    vec = TfidfVectorizer(ngram_range=(1, 2), min_df=1, max_df=max_df,
                           stop_words="english")
-    X = vec.fit_transform(texts)
+    try:
+        X = vec.fit_transform(texts)
+    except ValueError as exc:
+        # Last-resort: a vectorizer with no constraints. This should
+        # never fail for any non-empty input but guard against future
+        # sklearn quirks.
+        log.warning("TF-IDF fit failed (%s); retrying with max_df=1.0", exc)
+        vec = TfidfVectorizer(ngram_range=(1, 1), min_df=1, max_df=1.0)
+        X = vec.fit_transform(texts)
     if X.shape[1] == 0:
         return pd.DataFrame({"Topic": [0] * len(texts),
                              "TopicName": ["general"] * len(texts),

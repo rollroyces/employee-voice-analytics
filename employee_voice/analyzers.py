@@ -324,8 +324,11 @@ def _fallback_category(text: str) -> List[Tuple[str, float]]:
         if hits:
             scored.append((cat, min(0.95, 0.30 + 0.15 * hits)))
     if not scored:
-        # weak default — mark as Job Satisfaction with low score
-        scored.append(("Job Satisfaction", 0.25))
+        # No keyword hit — the comment is still analyzable (it's not "no
+        # comment") so we need a category above CATEGORY_MIN_SCORE to keep
+        # the layer contract intact. Mark it as "Other" with a score that
+        # clears the threshold; downstream consumers can filter on it.
+        scored.append(("Other", max(0.35, CATEGORY_MIN_SCORE + 0.05)))
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored
 

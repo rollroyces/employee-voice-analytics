@@ -122,10 +122,11 @@ def run_preprocess(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series
     pp = preprocess_series(df["Comment"])
     df = df.copy()
     df["CleanComment"] = pp["CleanComment"]
-    is_non_answer = pp["IsNonAnswer"]
-    is_short = pp["IsShort"]
+    is_non_answer = pp["IsNonAnswer"].astype(bool)
+    is_short = pp["IsShort"].astype(bool)
+    analyzable_count = int((~is_non_answer & ~is_short).sum())
     log.info("Layer 0 preprocess: %d / %d rows analyzable",
-             int((~is_non_answer & ~is_short).sum()), len(df))
+             analyzable_count, len(df))
     return df, is_non_answer, is_short
 
 

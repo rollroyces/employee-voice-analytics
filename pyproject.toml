@@ -87,10 +87,10 @@ include = ["employee_voice*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q"
+# Default to skipping the Databricks notebook test (it needs Java +
+# PySpark + delta-spark). Run it explicitly with `pytest -m databricks`.
+addopts = "-ra -q -m 'not databricks'"
 testpaths = ["tests"]
-# Local-only test for the Databricks notebook needs Java + pyspark; skip by
-# default so plain `pytest` works on machines without them.
 markers = [
     "databricks: tests that require Java + PySpark (run explicitly with `pytest -m databricks`)",
 ]

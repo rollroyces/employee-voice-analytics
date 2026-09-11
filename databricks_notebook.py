@@ -41,7 +41,6 @@ from typing import Optional
 # package in a workspace folder mounted to /Workspace/Users/.../repo.
 try:
     from employee_voice import config as cfg  # noqa: F401
-    from employee_voice.preprocess import preprocess_series  # noqa: F401
     from employee_voice.layers import run_all_layers  # noqa: F401
 except ImportError:
     _here = os.path.dirname(os.path.abspath("databricks_notebook.py"))
@@ -50,7 +49,6 @@ except ImportError:
         if p not in sys.path:
             sys.path.insert(0, p)
     from employee_voice import config as cfg  # noqa: E402,F401
-    from employee_voice.preprocess import preprocess_series  # noqa: E402,F401
     from employee_voice.layers import run_all_layers  # noqa: E402,F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -103,7 +101,6 @@ print(f"RUN_SUMMARY       = {RUN_SUMMARY}")
 # Spark can natively read CSV / JSON / Parquet / Delta. For XLSX we drop to
 # pandas (openpyxl) and rewrap into a Spark DataFrame — XLSX is rare for
 # bulk HR data, but worth supporting for one-off analyst exports.
-import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructType, StructField, DoubleType, IntegerType

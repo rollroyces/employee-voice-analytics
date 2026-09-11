@@ -105,3 +105,36 @@ class TestPipeline:
     def test_unknown_text_column_raises(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):
             run(input_path=str(DATA), outdir=str(tmp_path), text_column="NopeNopeNope")
+
+    def test_empty_input_handled(self, tmp_path):
+        """A zero-row CSV must produce a zero-row fact table without
+        crashing on the analyzable mask / TF-IDF vectorizer."""
+        empty = tmp_path / "empty.csv"
+        empty.write_text("FeedbackID,Comment,BU\n")
+        art = run(input_path=str(empty), outdir=str(tmp_path))
+        assert len(art["fact"]) == 0
+        # All required columns are still present (so Power BI doesn't break).
+        for c in ("Sentiment", "Category1", "Emotion", "RiskScore", "RiskBand"):
+            assert c in art["fact"].columns
+
+    def test_single_row_input_handled(self, tmp_path):
+        """A one-row CSV must not crash topic discovery on the
+        TfidfVectorizer `max_df < min_df` constraint."""
+        one = tmp_path / "one.csv"
+        one.write_text(
+            "FeedbackID,Comment,BU\n"
+            "F1,Great team and supportive manager,Engineering\n"
+        )
+        art = run(input_path=str(one), outdir=str(tmp_path))
+        assert len(art["fact"]) == 1
+        assert art["fact"]["Sentiment"].iloc[0] in ("positive", "neutral", "negative")
+        assert art["fact"]["Category1"].iloc[0] != "No Comment"
+
+    def test_no_keyword_match_returns_other_category(self, tmp_path):
+        """A comment with no taxonomy keywords still gets a real
+        category (above CATEGORY_MIN_SCORE) so the layer contract holds."""
+        from employee_voice.analyzers import _fallback_category
+        scored = _fallback_category("Hello world, this is a test")
+        labels = [c for c, _ in scored]
+        assert "Other" in labels
+        assert all(s >= _cfg.CATEGORY_MIN_SCORE for _, s in scored)
