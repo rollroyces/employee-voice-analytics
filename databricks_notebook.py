@@ -35,26 +35,35 @@ import sys
 import logging
 from typing import Optional
 
-# Make the local package importable when the notebook sits next to employee_voice/
-# on a Git folder mounted to /Workspace/...
+# Package import — when running on Databricks via `%pip install -e .` or
+# by attaching the wheel, `employee_voice` is already on PYTHONPATH. The
+# fallback below covers the case where the notebook sits next to the
+# package in a workspace folder mounted to /Workspace/Users/.../repo.
 try:
-    _here = os.path.dirname(__file__) if "__file__" in globals() else os.getcwd()
-except NameError:
-    _here = os.getcwd()
-_parent = os.path.abspath(os.path.join(_here, ".."))
-for p in (_here, _parent):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-from employee_voice import config as cfg  # noqa: E402
-from employee_voice.preprocess import preprocess_series  # noqa: E402
-from employee_voice.analyzers import (  # noqa: E402
-    analyze_sentiment,
-    analyze_category,
-    analyze_emotion,
-    score_risk,
-)
-from employee_voice.topics import discover_topics  # noqa: E402
+    from employee_voice import config as cfg  # noqa: F401
+    from employee_voice.preprocess import preprocess_series  # noqa: F401
+    from employee_voice.analyzers import (  # noqa: F401
+        analyze_sentiment,
+        analyze_category,
+        analyze_emotion,
+        score_risk,
+    )
+    from employee_voice.topics import discover_topics  # noqa: F401
+except ImportError:
+    _here = os.path.dirname(os.path.abspath("databricks_notebook.py"))
+    _parent = os.path.dirname(_here)
+    for p in (_here, _parent):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    from employee_voice import config as cfg  # noqa: E402,F401
+    from employee_voice.preprocess import preprocess_series  # noqa: E402,F401
+    from employee_voice.analyzers import (  # noqa: E402,F401
+        analyze_sentiment,
+        analyze_category,
+        analyze_emotion,
+        score_risk,
+    )
+    from employee_voice.topics import discover_topics  # noqa: E402,F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("employee_voice.databricks")
@@ -312,7 +321,13 @@ for col, dtype in (("SentimentScore", "float64"), ("Category1Score", "float64"),
         pdf[col] = pd.to_numeric(pdf[col], errors="coerce").fillna(0.0)
 for col in ("Topic",):
     if col in pdf.columns:
+        # Cast to Int64 first, then unwrap the pandas extension dtype into a
+        # plain object column of native ints + None. PySpark's createDataFrame
+        # does not understand pd.NA / pandas extension arrays in 4.x and would
+        # otherwise coerce the column to float64 and fail the IntegerType
+        # schema check. Converting here keeps the schema honest.
         pdf[col] = pd.to_numeric(pdf[col], errors="coerce").astype("Int64")
+        pdf[col] = pdf[col].astype("object").where(pdf[col].notna(), None)
 
 # Cast SurveyDate to ISO string for Spark.
 if "SurveyDate" in pdf.columns:

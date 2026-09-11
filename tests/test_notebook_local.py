@@ -3,27 +3,31 @@ on a local Spark session. NOT a substitute for running on real Databricks,
 but exercises every cell, catches import / syntax / API errors, and confirms
 the local pipeline + Spark compose correctly.
 
-Run:
+Run with:
     export JAVA_HOME=$HOME/.local/jdk/jdk-21.0.12.1.jdk/Contents/Home
     export PATH=$JAVA_HOME/bin:$PATH
-    cd employee_voice && python tests/test_notebook_local.py
+    pip install 'employee-voice-analytics[databricks]'
+    pytest -m databricks tests/test_notebook_local.py
 
 The notebook still ships the production Delta paths; this driver rewrites
 dbfs:/ URIs to local paths and Delta -> Parquet for the test run only.
+
+Marked @pytest.mark.databricks so plain `pytest` skips it on machines without
+Java + PySpark + Delta installed.
 """
 from __future__ import annotations
 import os
 import re
 import sys
-import textwrap
-import traceback
+
+import pytest
 
 # Make the package importable regardless of cwd.
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
 sys.path.insert(0, PROJECT)
 
-NB_PATH = os.path.join(os.path.dirname(HERE), "databricks_notebook.py")
+NB_PATH = os.path.join(PROJECT, "databricks_notebook.py")
 
 
 # -- Minimal dbutils shim -------------------------------------------------
@@ -60,7 +64,8 @@ def split_cells(path):
 
 
 # -- Execute --------------------------------------------------------------
-def main():
+def _run_notebook() -> None:
+    """Execute every cell in the notebook against a real local SparkSession."""
     from pyspark.sql import SparkSession
     spark = (
         SparkSession.builder
@@ -76,34 +81,27 @@ def main():
     )
     spark.sparkContext.setLogLevel("ERROR")
 
-    # Local test artifact dir — on real Databricks these go to dbfs:/...
     local_out = os.path.join(PROJECT, "_test_output")
+    if os.path.exists(local_out):
+        import shutil
+        shutil.rmtree(local_out)
     os.makedirs(local_out, exist_ok=True)
-    # Inject globals the notebook expects.
+
     g = {
         "__name__": "__main__",
         "spark": spark,
         "dbutils": _DBUtils(),
         "sc": spark.sparkContext,
     }
-    # Patch the notebook's DBFS path constants by exec'ing a small override cell
-    # before any cell that touches dbfs:.
     g["INPUT_PATH"] = os.path.join(PROJECT, "data", "sample_feedback.csv")
 
     cells = split_cells(NB_PATH)
-    # Local-mode: rewrite dbfs:/ paths to local paths so the writes succeed.
-    # On real Databricks this substitution is a no-op.
     rewrite_map = {
         "dbfs:/FileStore/employee_voice/output": local_out,
         "dbfs:/FileStore/employee_voice/sample_feedback.csv":
             os.path.join(PROJECT, "data", "sample_feedback.csv"),
-        "/dbfs": local_out,  # XLSX path translation
+        "/dbfs": local_out,
     }
-    # Rewrite `dbfs:/FileStore/employee_voice/output/dim_topic` to a parquet path
-    # so we don't fight Delta / Spark version skew in the local test.
-    # Replace `.format("delta")` with `.format("parquet")` everywhere — same
-    # schema, no Delta internals required. saveAsTable calls then need a real
-    # catalog (also skipped locally).
     rewrite_map_local_only = [
         ('.format("delta")', '.format("parquet")'),
     ]
@@ -113,7 +111,6 @@ def main():
             text = text.replace(src, dst)
         for src, dst in rewrite_map_local_only:
             text = text.replace(src, dst)
-        # Comment-out saveAsTable write chains — they need a real catalog.
         text = re.sub(
             r"\(\s*[a-z_]+\.write[^)]*\.saveAsTable\([^)]+\)\s*\)",
             "# saveAsTable skipped locally (no catalog); see databricks_notebook.py for the real call",
@@ -121,28 +118,26 @@ def main():
         )
         return text
 
-    print(f"Executing {len(cells)} cells from {os.path.basename(NB_PATH)}")
+    failures: list[tuple[int, str]] = []
     for i, cell in enumerate(cells, 1):
-        # Strip leading magic lines (`%pip`, `%md`) — they're Databricks-only.
         lines = [ln for ln in cell.splitlines()
                  if not ln.lstrip().startswith("%")]
         cleaned = "\n".join(lines)
         cleaned = rewrite(cleaned)
         if not cleaned.strip():
             continue
-        head = cleaned.splitlines()[0][:80]
-        print(f"\n--- cell {i}: {head!r} ---")
         try:
             exec(compile(cleaned, f"<cell {i}>", "exec"), g)
-        except Exception:
-            print(f"!! cell {i} failed:")
-            traceback.print_exc()
-            print("\nFAILED — stopping here.")
-            return 1
-    print("\nALL CELLS PASSED.")
+        except Exception as exc:  # noqa: BLE001
+            failures.append((i, f"{type(exc).__name__}: {exc}"))
+
     spark.stop()
-    return 0
+
+    if failures:
+        details = "\n".join(f"  cell {i}: {msg}" for i, msg in failures)
+        pytest.fail(f"Notebook execution failed:\n{details}")
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+@pytest.mark.databricks
+def test_notebook_runs_locally():
+    _run_notebook()

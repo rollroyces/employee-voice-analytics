@@ -247,7 +247,10 @@ def run(input_path: str,
             "TopicKeywords": ",".join(m["Keywords"]),
             "DocCount": m["Count"],
         })
-    pd.DataFrame(rows).to_csv(dim_topic_path, index=False)
+    # Explicit columns so an empty `rows` still produces a header-only CSV
+    # that can be round-tripped through pd.read_csv without EmptyDataError.
+    pd.DataFrame(rows, columns=["Topic", "TopicName", "TopicKeywords", "DocCount"])\
+        .to_csv(dim_topic_path, index=False)
 
     summary_path = os.path.join(outdir, cfg.OUTPUT_SUMMARY_CATEGORY)
     summary = (

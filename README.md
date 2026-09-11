@@ -9,37 +9,73 @@ A single pipeline. One fact table. Drop the CSVs into Power BI.
 
 ```
 employee_voice/
+    __init__.py
     config.py        taxonomy, model ids, risk weights   <-- edit this first
     preprocess.py    cleaning, "N/A" noise filtering
     analyzers.py     sentiment / category / emotion / risk score
     topics.py        BERTopic (fallback: TF-IDF + KMeans)
     pipeline.py      orchestration -> fact_employee_feedback
+    cli.py           argparse CLI (installed as `employee-voice` script)
     summarizer.py    optional Azure OpenAI exec summary
-run_pipeline.py     CLI runner
+    py.typed         PEP 561 marker for type checkers
 databricks_notebook.py   PySpark / Databricks version
-tests/test_notebook_local.py   verifies the notebook on a local Spark session
+run_pipeline.py     thin shim -> employee_voice.cli.main
 data/sample_feedback.csv
-output/             generated
+tests/
+    conftest.py
+    test_analyzers.py        unit tests (fallback engines)
+    test_pipeline.py         integration tests
+    test_notebook_local.py   marked @pytest.mark.databricks
+pyproject.toml      package metadata, console script, optional deps
+requirements.txt    mirrors pyproject.toml core deps
 ```
+
+## Install
+
+```bash
+# Minimal: fallback engines only (no model downloads).
+pip install employee-voice-analytics
+
+# With HuggingFace models for Layers 1-4:
+pip install 'employee-voice-analytics[ml,topics]'
+
+# Everything including Azure OpenAI + Databricks extras:
+pip install 'employee-voice-analytics[all,databricks]'
+```
+
+After install the `employee-voice` console script is on `$PATH`.
 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
-python run_pipeline.py --input data/sample_feedback.csv --outdir output
+# If installed via pip:
+employee-voice --input data/sample_feedback.csv --outdir output
+
+# If running from a source clone without installing:
+python -m employee_voice --input data/sample_feedback.csv --outdir output
+# (legacy: `python run_pipeline.py ...` still works)
 ```
 
 Your own file:
 
 ```bash
-python run_pipeline.py --input survey.xlsx --sheet "Responses" --text-column "Q7_Comments"
+employee-voice --input survey.xlsx --sheet "Responses" --text-column "Q7_Comments"
+```
+
+## Tests
+
+```bash
+pip install 'employee-voice-analytics[dev]'
+pytest                       # unit + integration (~3 s, no Java needed)
+pytest -m databricks         # also runs the notebook locally (needs Java + pyspark + delta-spark)
 ```
 
 ## Databricks / PySpark
 
 ```bash
 # In a Databricks notebook (or `python databricks_notebook.py`):
-#   1. Mount or copy databricks_notebook.py to your workspace.
+#   1. Attach the wheel: `pip install /path/to/employee_voice_analytics-0.1.0-py3-none-any.whl[databricks]`
+#      (or `%pip install -e .` from a source clone).
 #   2. Set widgets in the Job UI or leave defaults.
 #   3. Run All.
 ```
@@ -47,18 +83,6 @@ python run_pipeline.py --input survey.xlsx --sheet "Responses" --text-column "Q7
 Writes Delta tables (`{catalog}.{database}.fact_employee_feedback`,
 `dim_topic`, `summary_category`, `summary_bu`) when `output_catalog` is set,
 or Delta/Parquet files under `dbfs:/FileStore/employee_voice/output/` otherwise.
-
-To verify the notebook locally before pushing to Databricks:
-
-```bash
-export JAVA_HOME=$HOME/.local/jdk/jdk-21.0.12.1.jdk/Contents/Home
-export PATH=$JAVA_HOME/bin:$PATH
-pip install pyspark delta-spark
-python tests/test_notebook_local.py
-```
-
-The test rewrites `dbfs:/` paths to local and `format("delta")` → `format("parquet")`
-on the fly; the production notebook file is unchanged.
 
 ## Models
 
