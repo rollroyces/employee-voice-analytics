@@ -1,0 +1,20 @@
+# Core — always needed.
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+openpyxl>=3.1
+
+# HuggingFace transformers backend (sentiment, category, emotion).
+# Heavy: ~3 GB download on first run. Skip if you only want the fallback engines.
+# transformers>=4.40
+# torch>=2.1
+# sentencepiece
+
+# BERTopic + sentence-transformers backend (themes).
+# bertopic>=0.16
+# sentence-transformers>=2.6
+# umap-learn>=0.5
+# hdbscan>=0.8
+
+# Optional: Azure OpenAI exec summary.
+# openai>=1.30
