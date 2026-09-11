@@ -14,6 +14,8 @@ employee_voice/
     preprocess.py    cleaning, "N/A" noise filtering
     analyzers.py     sentiment / category / emotion / risk score
     topics.py        BERTopic (fallback: TF-IDF + KMeans)
+    layers.py        strict layer runner + schema-contract enforcement
+    _errors.py       shared exception types
     pipeline.py      orchestration -> fact_employee_feedback
     cli.py           argparse CLI (installed as `employee-voice` script)
     summarizer.py    optional Azure OpenAI exec summary
@@ -25,10 +27,49 @@ tests/
     conftest.py
     test_analyzers.py        unit tests (fallback engines)
     test_pipeline.py         integration tests
+    test_layers.py           layer-enforcement: deps, ordering, contracts
     test_notebook_local.py   marked @pytest.mark.databricks
 pyproject.toml      package metadata, console script, optional deps
 requirements.txt    mirrors pyproject.toml core deps
 ```
+
+## Layer enforcement (Layers 0-6)
+
+The pipeline runs **all seven layers in a fixed order** and verifies the
+output schema matches `LAYER_CONTRACTS` in `config.py`:
+
+| # | Layer | Required columns | Runtime deps |
+|---|---|---|---|
+| 0 | preprocess | `Comment`, `CleanComment` | (none) |
+| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` |
+| 2 | category  | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` |
+| 3 | emotion   | `Emotion`, `EmotionScore` | `transformers`, `torch` |
+| 4 | themes    | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` |
+| 5 | risk score | `RiskScore`, `RiskBand` | (none) |
+| 6 | llm summary | (writes side files) | `openai` |
+
+If a layer's dependency is missing, the pipeline raises
+`LayerDependencyError` with the matching `pip install` command. To use
+the lightweight keyword / TF-IDF fallback engines instead (useful for
+CI, dev, or pre-building the BI model before the GPU libraries are
+approved), opt in explicitly:
+
+```bash
+export EMPLOYEE_VOICE_ALLOW_FALLBACK=1
+employee-voice --input data/sample_feedback.csv --outdir output
+```
+
+Or programmatically:
+
+```python
+from employee_voice import layers
+layers.set_allow_fallback(True)
+from employee_voice.pipeline import run
+run("data/sample_feedback.csv", "output")
+```
+
+If a layer's runner fails to populate a required column, the pipeline
+raises `LayerContractError` instead of silently emitting nulls.
 
 ## Install
 

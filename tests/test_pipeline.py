@@ -7,10 +7,15 @@ import pandas as pd
 import pytest
 
 # Force the fallback engines — the HF backend would download GB of weights.
-os.environ.setdefault("EMPLOYEE_VOICE_FORCE_FALLBACK", "1")
+os.environ.setdefault("EMPLOYEE_VOICE_ALLOW_FALLBACK", "1")
+
+# Toggle the global before any analyzer module touches it.
+from employee_voice import config as _cfg  # noqa: E402
+_cfg.ALLOW_FALLBACK = True
 
 from employee_voice.pipeline import run  # noqa: E402
 from employee_voice.preprocess import clean_text, is_non_answer  # noqa: E402
+from employee_voice import layers  # noqa: E402
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "sample_feedback.csv"
 

@@ -42,13 +42,7 @@ from typing import Optional
 try:
     from employee_voice import config as cfg  # noqa: F401
     from employee_voice.preprocess import preprocess_series  # noqa: F401
-    from employee_voice.analyzers import (  # noqa: F401
-        analyze_sentiment,
-        analyze_category,
-        analyze_emotion,
-        score_risk,
-    )
-    from employee_voice.topics import discover_topics  # noqa: F401
+    from employee_voice.layers import run_all_layers  # noqa: F401
 except ImportError:
     _here = os.path.dirname(os.path.abspath("databricks_notebook.py"))
     _parent = os.path.dirname(_here)
@@ -57,13 +51,7 @@ except ImportError:
             sys.path.insert(0, p)
     from employee_voice import config as cfg  # noqa: E402,F401
     from employee_voice.preprocess import preprocess_series  # noqa: E402,F401
-    from employee_voice.analyzers import (  # noqa: E402,F401
-        analyze_sentiment,
-        analyze_category,
-        analyze_emotion,
-        score_risk,
-    )
-    from employee_voice.topics import discover_topics  # noqa: E402,F401
+    from employee_voice.layers import run_all_layers  # noqa: E402,F401
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("employee_voice.databricks")
@@ -224,66 +212,18 @@ _PASSTHROUGH = ["FeedbackID", "SurveyType", "SurveyDate", "BU", "Dept", "Employe
 pdf = sdf.select(*[c for c in _PASSTHROUGH if c in sdf.columns]).toPandas()
 pdf["Comment"] = pdf["Comment"].fillna("").astype(str)
 
-pp = preprocess_series(pdf["Comment"])
-pdf["CleanComment"] = pp["CleanComment"]
-mask = (~pp["IsNonAnswer"]) & (~pp["IsShort"])
-log.info("Analyzable rows: %d / %d", int(mask.sum()), len(pdf))
-
-# Run analyzers in batches over the analyzable subset. The fallback engines
-# handle 20k rows in seconds; HF pipelines take longer but are still linear.
-if mask.any():
-    texts = pdf.loc[mask, "CleanComment"].tolist()
-    sent = analyze_sentiment(texts);  sent.index = pdf.index[mask]
-    cat  = analyze_category(texts);   cat.index  = pdf.index[mask]
-    emo  = analyze_emotion(texts);    emo.index  = pdf.index[mask]
-    pdf  = pd.concat([pdf, sent, cat, emo], axis=1)
-else:
-    for col, default in (("Sentiment", np.nan), ("SentimentScore", 0.0),
-                         ("Category1", np.nan), ("Category1Score", 0.0),
-                         ("Category2", np.nan), ("Category2Score", 0.0),
-                         ("AllCategories", np.nan), ("Emotion", np.nan),
-                         ("EmotionScore", 0.0)):
-        pdf[col] = default
-
-# Fill non-analyzable rows with sentinel values.
-for col, default in (("Sentiment", "No Comment"), ("SentimentScore", 0.0),
-                     ("Category1", "No Comment"), ("Category1Score", 0.0),
-                     ("Category2", ""), ("Category2Score", 0.0),
-                     ("AllCategories", ""),
-                     ("Emotion", "No Comment"), ("EmotionScore", 0.0)):
-    pdf[col] = pdf[col].astype(object).where(mask, default)
-
-# Risk score (vectorised).
-risk_scores, risk_bands = [], []
-for _, row in pdf.iterrows():
-    if not bool(mask.loc[_]):
-        risk_scores.append(0.0); risk_bands.append("Low"); continue
-    s, b = score_risk(
-        sentiment=str(row["Sentiment"]),
-        sentiment_score=float(row["SentimentScore"] or 0),
-        emotion=str(row["Emotion"] or ""),
-        emotion_score=float(row["EmotionScore"] or 0),
-        all_categories=str(row["AllCategories"] or ""),
-        comment=str(row["CleanComment"] or ""),
-    )
-    risk_scores.append(s); risk_bands.append(b)
-pdf["RiskScore"] = risk_scores
-pdf["RiskBand"] = risk_bands
-
-# Topics (driver-side, like the other analyzers).
-if RUN_TOPICS and mask.any():
-    tdf, meta = discover_topics(pdf.loc[mask, "CleanComment"].tolist())
-    tdf.index = pdf.index[mask]
-    pdf["Topic"] = np.nan
-    pdf["TopicName"] = ""
-    pdf["TopicKeywords"] = ""
-    for col in ("Topic", "TopicName", "TopicKeywords"):
-        pdf.loc[tdf.index, col] = tdf[col].values
-else:
-    pdf["Topic"] = np.nan
-    pdf["TopicName"] = ""
-    pdf["TopicKeywords"] = ""
-    meta = {}
+# Run Layers 0-5 under the same contract as the local pipeline. Raises
+# LayerDependencyError on missing deps and LayerContractError on schema
+# violations. The notebook's RUN_TOPICS widget selects whether Layer 4
+# is in scope; Layer 6 is invoked separately via RUN_SUMMARY below.
+layered = run_all_layers(
+    pdf,
+    outdir="dbfs:/FileStore/employee_voice/output",
+    run_topics=RUN_TOPICS,
+    run_summary_layer=False,
+)
+pdf = layered["df"]
+meta = layered["topic_meta"]
 
 # COMMAND ----------
 

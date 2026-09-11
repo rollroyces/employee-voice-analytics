@@ -14,12 +14,13 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from . import config as cfg
+from ._errors import LayerDependencyError
 from .config import (
     CATEGORIES,
     CATEGORY_MIN_SCORE,
     CATEGORY_MODEL_ID,
     EMOTION_MODEL_ID,
-    FORCE_FALLBACK,
     HIGH_RISK_CATEGORIES,
     INTENT_TO_LEAVE_KEYWORDS,
     RISK_BANDS,
@@ -43,25 +44,57 @@ class _Backends:
 
 
 def _detect_backends() -> _Backends:
-    if FORCE_FALLBACK:
+    """Pick the analyzer backend for each layer.
+
+    Resolution order:
+      1. If ALLOW_FALLBACK is True (config.ALLOW_FALLBACK), use fallback
+         engines regardless of what's installed.
+      2. Otherwise try to import `transformers`. If it succeeds, use it.
+      3. If `transformers` is missing and ALLOW_FALLBACK is False, raise
+         LayerDependencyError. Production code should never silently
+         degrade to the lexicon engines.
+    """
+    if cfg.ALLOW_FALLBACK:
         return _Backends("fallback", "fallback", "fallback")
     try:
         import transformers  # noqa: F401
         from transformers import pipeline  # noqa: F401
         return _Backends("transformers", "transformers", "transformers")
-    except Exception as exc:  # pragma: no cover
-        log.info("transformers unavailable (%s) — using fallback engines", exc)
-        return _Backends("fallback", "fallback", "fallback")
+    except ImportError as exc:
+        raise LayerDependencyError(
+            "HuggingFace `transformers` is required for Layers 1-3 "
+            "(sentiment, category, emotion) and was not importable. "
+            "Install with `pip install 'employee-voice-analytics[ml]'` "
+            "or set EMPLOYEE_VOICE_ALLOW_FALLBACK=1 to use the keyword fallback."
+        ) from exc
 
 
-_BACKENDS = _detect_backends()
-log.info("analyzer backends: %s", _BACKENDS)
+_BACKENDS: Optional[_Backends] = None
+log.info("analyzer backend resolver installed; will detect on first use")
 
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded HuggingFace pipelines (only when transformers backend is on)
 # ---------------------------------------------------------------------------
 _PIPES: Dict[str, object] = {}
+
+
+def _current_backend() -> _Backends:
+    """Return the active backend, re-detecting whenever ALLOW_FALLBACK
+    has been toggled since the last call. Caches the result until either
+    the flag flips or `_reset_backends()` is called."""
+    global _BACKENDS
+    if _BACKENDS is None:
+        _BACKENDS = _detect_backends()
+        log.info("analyzer backends: %s", _BACKENDS)
+    return _BACKENDS
+
+
+def _reset_backends() -> None:
+    """Forget the cached backend. Call after toggling ALLOW_FALLBACK
+    in long-running processes (Databricks jobs, tests)."""
+    global _BACKENDS
+    _BACKENDS = None
 
 
 def _get_pipe(task: str, model_id: str):
@@ -182,7 +215,7 @@ def _fallback_sentiment(text: str) -> Tuple[str, float]:
 
 
 def analyze_sentiment(texts: List[str]) -> pd.DataFrame:
-    if _BACKENDS.sentiment == "fallback":
+    if _current_backend().sentiment == "fallback":
         rows = [_fallback_sentiment(t) for t in texts]
         return pd.DataFrame(rows, columns=["Sentiment", "SentimentScore"])
     pipe = _get_pipe("sentiment-analysis", SENTIMENT_MODEL_ID)
@@ -302,7 +335,7 @@ def analyze_category(texts: List[str]) -> pd.DataFrame:
     Returns columns: Category1, Category1Score, Category2, Category2Score, AllCategories
     AllCategories is a " | cat(score)" string for downstream filtering.
     """
-    if _BACKENDS.category == "fallback":
+    if _current_backend().category == "fallback":
         rows = []
         for t in texts:
             scored = _fallback_category(t)
@@ -372,7 +405,7 @@ def _fallback_emotion(text: str) -> Tuple[str, float]:
 
 
 def analyze_emotion(texts: List[str]) -> pd.DataFrame:
-    if _BACKENDS.emotion == "fallback":
+    if _current_backend().emotion == "fallback":
         rows = [_fallback_emotion(t) for t in texts]
         return pd.DataFrame(rows, columns=["Emotion", "EmotionScore"])
     pipe = _get_pipe("text-classification", EMOTION_MODEL_ID)

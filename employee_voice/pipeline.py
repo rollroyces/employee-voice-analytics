@@ -1,23 +1,23 @@
 """
-Orchestration: load input -> preprocess -> analyze -> score -> emit fact + dims.
+Orchestration: load input -> run all layers -> emit fact + dims.
+
+Layer execution is delegated to `employee_voice.layers.run_all_layers`
+which enforces the per-layer schema contract in LAYER_CONTRACTS (config.py).
+This module is responsible only for:
+  - input parsing / column normalisation
+  - calling the layer runner
+  - writing the four output artifacts
+  - the optional LLM exec summary
 """
 from __future__ import annotations
 import logging
 import os
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 from . import config as cfg
-from .preprocess import preprocess_series
-from .analyzers import (
-    analyze_sentiment,
-    analyze_category,
-    analyze_emotion,
-    score_risk,
-)
-from .topics import discover_topics
+from .layers import run_all_layers
 
 log = logging.getLogger(__name__)
 
@@ -149,90 +149,17 @@ def run(input_path: str,
 
     out["Comment"] = df["Comment"].fillna("").astype(str)
 
-    # preprocess
-    pp = preprocess_series(out["Comment"])
-    out["CleanComment"] = pp["CleanComment"]
-    is_non_answer = pp["IsNonAnswer"]
-    is_short = pp["IsShort"]
-    analyzable_mask = (~is_non_answer) & (~is_short)
-    log.info("Analyzable rows: %d / %d", int(analyzable_mask.sum()), len(out))
-
-    # sentiment / category / emotion over analyzable rows
-    if analyzable_mask.any():
-        idx = out.index[analyzable_mask]
-        texts = out.loc[idx, "CleanComment"].tolist()
-
-        sent = analyze_sentiment(texts)
-        sent.index = idx
-        cat = analyze_category(texts)
-        cat.index = idx
-        emo = analyze_emotion(texts)
-        emo.index = idx
-
-        out = pd.concat([out, sent, cat, emo], axis=1)
-    else:
-        out["Sentiment"] = np.nan
-        out["SentimentScore"] = np.nan
-        out["Category1"] = np.nan
-        out["Category1Score"] = np.nan
-        out["Category2"] = np.nan
-        out["Category2Score"] = np.nan
-        out["AllCategories"] = np.nan
-        out["Emotion"] = np.nan
-        out["EmotionScore"] = np.nan
-
-    # fill non-analyzable
-    for col, default in (
-        ("Sentiment", "No Comment"),
-        ("SentimentScore", 0.0),
-        ("Category1", "No Comment"),
-        ("Category1Score", 0.0),
-        ("Category2", ""),
-        ("Category2Score", 0.0),
-        ("AllCategories", ""),
-        ("Emotion", "No Comment"),
-        ("EmotionScore", 0.0),
-    ):
-        out[col] = out[col].astype(object).where(analyzable_mask, default)
-
-    # risk score (computed for every row; non-answers just stay Low)
-    risks = []
-    for _, row in out.iterrows():
-        if not analyzable_mask.loc[_]:
-            risks.append((0.0, "Low"))
-            continue
-        score, band = score_risk(
-            sentiment=str(row["Sentiment"]),
-            sentiment_score=float(row["SentimentScore"] or 0),
-            emotion=str(row["Emotion"] or ""),
-            emotion_score=float(row["EmotionScore"] or 0),
-            all_categories=str(row["AllCategories"] or ""),
-            comment=str(row["CleanComment"] or ""),
-        )
-        risks.append((score, band))
-    out["RiskScore"] = [r[0] for r in risks]
-    out["RiskBand"] = [r[1] for r in risks]
-
-    # topics (only on analyzable comments)
-    if run_topics:
-        if analyzable_mask.any():
-            tdf, meta = discover_topics(out.loc[analyzable_mask, "CleanComment"].tolist())
-            tdf.index = out.index[analyzable_mask]
-            out["Topic"] = np.nan
-            out["TopicName"] = ""
-            out["TopicKeywords"] = ""
-            for col in ("Topic", "TopicName", "TopicKeywords"):
-                out.loc[tdf.index, col] = tdf[col].values
-        else:
-            out["Topic"] = np.nan
-            out["TopicName"] = ""
-            out["TopicKeywords"] = ""
-            meta = {}
-    else:
-        out["Topic"] = np.nan
-        out["TopicName"] = ""
-        out["TopicKeywords"] = ""
-        meta = {}
+    # Run Layers 0-5 (and optionally 4 / 6) under the contract in
+    # config.LAYER_CONTRACTS. Raises LayerDependencyError on missing deps
+    # and LayerContractError on schema violations.
+    layered = run_all_layers(
+        out,
+        outdir=outdir,
+        run_topics=run_topics,
+        run_summary_layer=False,  # CLI handles Layer 6 separately
+    )
+    out = layered["df"]
+    meta = layered["topic_meta"]
 
     # write outputs
     fact_path = os.path.join(outdir, cfg.OUTPUT_FACT)

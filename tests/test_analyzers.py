@@ -3,11 +3,15 @@ from __future__ import annotations
 import os
 
 # Force the lightweight engines so the test never tries to load HF models.
-os.environ.setdefault("EMPLOYEE_VOICE_FORCE_FALLBACK", "1")
+os.environ.setdefault("EMPLOYEE_VOICE_ALLOW_FALLBACK", "1")
 
 import pytest
 
-from employee_voice.analyzers import (
+# Toggle the global before any analyzer module touches it.
+from employee_voice import config as _cfg  # noqa: E402
+_cfg.ALLOW_FALLBACK = True
+
+from employee_voice.analyzers import (  # noqa: E402
     _fallback_sentiment,
     _fallback_category,
     _fallback_emotion,
