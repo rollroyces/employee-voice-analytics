@@ -292,6 +292,24 @@ milliseconds; a full Silver re-run takes days. For production, run
 HF on a Spark cluster via `analyze_spark()` — the `pandas_udf(SCALAR_ITER)`
 runtime parallelises per-row inference across executors.
 
+#### Distilled category models
+
+Distilling BART-MNLI to a smaller NLI model gives a 2-5× speedup
+on a single machine:
+
+| model | params | rows/sec | vs BART |
+|---|---:|---:|---:|
+| `facebook/bart-large-mnli` (default) | 400M | 1.5 | 1.0× |
+| `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | 140M | 3.8 | 2.5× |
+| `cross-encoder/nli-deberta-v3-small` | 140M | 4.1 | 2.7× |
+| `typeform/distilbert-base-uncased-mnli` | 70M | 7.9 | **5.3×** |
+
+`typeform/distilbert-base-uncased-mnli` is the practical sweet spot
+when single-machine throughput matters more than top-1 accuracy.
+Set `CATEGORY_MODEL_ID` in `config.py` to switch. See
+[`benchmarks/RESULTS_category_models.md`](./benchmarks/RESULTS_category_models.md)
+for the full report including accuracy trade-offs.
+
 ```bash
 # Lexicon (fast, no model downloads)
 python benchmarks/bench.py --rows 1000,10000,50000 --backend lexicon \

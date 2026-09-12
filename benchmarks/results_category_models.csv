@@ -1,0 +1,5 @@
+label,model,rows,elapsed_sec,rows_per_sec,accuracy_proxy
+"bart-large-mnli (400M, baseline)",facebook/bart-large-mnli,50,32.345,1.545833977430824,
+deberta-v3-base-mnli (140M),MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli,50,13.2662,3.7689767981788305,
+deberta-v3-small (140M),cross-encoder/nli-deberta-v3-small,50,12.2941,4.066991483719833,
+distilbert-base-mnli (70M),typeform/distilbert-base-uncased-mnli,50,6.3124,7.920917559090045,

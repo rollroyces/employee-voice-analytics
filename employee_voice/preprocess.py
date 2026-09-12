@@ -51,10 +51,16 @@ def preprocess_series(series: pd.Series) -> pd.DataFrame:
         IsShort      (bool)  — below MIN_COMMENT_LEN
     """
     cleaned = series.fillna("").astype(str).map(clean_text)
-    is_na = cleaned.map(is_non_answer)
-    is_short = (~is_na) & (cleaned.str.len() < MIN_COMMENT_LEN)
+    is_na = cleaned.map(is_non_answer).astype(bool)
+    # Cast the length comparison to a plain numpy bool array so the
+    # subsequent `&` works on empty Arrow-backed string Series in
+    # pandas 3.0. (The error in pandas 3.0 with Arrow strings is
+    # `TypeError: operation 'and_' not supported for dtype 'str' with
+    # dtype 'bool'` even though both operands *look* boolean.)
+    lengths = cleaned.str.len().to_numpy()
+    is_short = (lengths < MIN_COMMENT_LEN) & (~is_na.to_numpy())
     return pd.DataFrame({
         "CleanComment": cleaned,
         "IsNonAnswer": is_na,
-        "IsShort": is_short,
+        "IsShort": pd.Series(is_short, index=cleaned.index, dtype=bool),
     })

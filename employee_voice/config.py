@@ -26,6 +26,10 @@ from typing import Dict, List, Tuple
 # Models
 # ---------------------------------------------------------------------------
 SENTIMENT_MODEL_ID = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+# Default category model. For higher throughput on a single machine
+# (no GPU cluster), switch to `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`
+# (smaller, ~10x faster at modest accuracy cost). The HF bench
+# (`benchmarks/bench_category_models.py`) measures both.
 CATEGORY_MODEL_ID = "facebook/bart-large-mnli"
 EMOTION_MODEL_ID = "SamLowe/roberta-base-go_emotions"
 EMBEDDING_MODEL_ID = "all-MiniLM-L6-v2"  # for BERTopic
