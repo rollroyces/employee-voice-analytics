@@ -195,7 +195,8 @@ LAYER_CONTRACTS: Tuple[LayerContract, ...] = (
                   required_columns=("Topic", "TopicName", "TopicKeywords"),
                   depends_on=("sentence_transformers", "bertopic", "umap")),
     LayerContract(5, "risk_score",
-                  required_columns=("RiskScore", "RiskBand"),
+                  required_columns=("RiskScore", "RiskBand",
+                                    "PushFactors", "PullFactors"),
                   depends_on=()),
     LayerContract(6, "llm_summary",
                   required_columns=(),  # optional — writes side files only

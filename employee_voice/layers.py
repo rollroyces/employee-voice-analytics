@@ -204,7 +204,8 @@ def run_themes(df: pd.DataFrame, mask: pd.Series) -> tuple[pd.DataFrame, dict]:
 
 
 def run_risk(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    """Layer 5."""
+    """Layer 5. Computes the 0-100 RiskScore / RiskBand and adds
+    push-factor, pull-factor, and risk-velocity columns."""
     scores, bands = [], []
     for _, row in df.iterrows():
         if not bool(mask.loc[_]):
@@ -220,6 +221,14 @@ def run_risk(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
         scores.append(s); bands.append(b)
     df["RiskScore"] = scores
     df["RiskBand"] = bands
+
+    # Push / pull factors (Layer 5b). Optional but cheap.
+    from .risk_signals import add_factor_columns, compute_risk_velocity
+    df = add_factor_columns(df)
+
+    # Risk velocity (Layer 5c). Requires EmployeeID + SurveyDate; if
+    # absent the column is all NaN with a warning.
+    df = compute_risk_velocity(df)
     return df
 
 
