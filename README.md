@@ -83,14 +83,55 @@ argparse) are on `$PATH`.
 
 ## Quick start
 
+### Python (recommended)
+
+```python
+import pandas as pd
+import employee_voice
+
+# In-memory DataFrame -> enriched DataFrame
+df = pd.read_csv("data/feedback.csv")
+fact = employee_voice.analyze_feedback(
+    df,
+    redact=True,        # PII-scrub via regex
+    k_anonymity=5,       # blank under-threshold slices
+    run_topics=True,
+)
+print(fact[["FeedbackID", "Sentiment", "Category1", "RiskBand",
+           "PushFactors", "PullFactors", "RiskVelocity"]].head())
+
+# File in / file out
+artifacts = employee_voice.analyze_file(
+    "data/feedback.csv", "output/",
+    redact=True, k_anonymity=5,
+)
+# artifacts["fact"], artifacts["fact_path"], artifacts["bu_path"], ...
+
+# Per-layer building blocks
+redacted = employee_voice.scrub(df["Comment"], backend="regex")
+aspects  = employee_voice.extract_aspects(["Great manager, awful salary"])
+factors  = employee_voice.detect_push_factors(comment)
+score, band = employee_voice.score_risk("negative", 0.9, "anger", 0.8,
+                                       "Compensation(0.9)", "")
+
+# Spark DataFrame
+from employee_voice import analyze_spark
+enriched_sdf = analyze_spark(spark_df, mlflow_experiment="/Shared/eva")
+
+# Synthetic data for tests / demos
+synth = employee_voice.generate_synthetic(n=250, seed=42)
+```
+
+### CLI
+
 ```bash
-# Generate a realistic synthetic HR dataset (250 rows, 4 personas).
+# Generate a realistic synthetic HR dataset
 eva generate-sample --rows 250 --out data/sample_feedback_synth.csv
 
-# Run the full pipeline on the bundled sample.
+# Run the full pipeline
 eva analyze --input data/sample_feedback_synth.csv --outdir output
 
-# With PII redaction + k-anonymity suppression.
+# With PII redaction + k-anonymity
 eva analyze \
     --input data/sample_feedback_synth.csv \
     --outdir output \
@@ -98,9 +139,12 @@ eva analyze \
     --pii-backend presidio \
     --k-anonymity 5
 
-# Inspect a finished fact table in the terminal.
+# Terminal dashboard
 eva dashboard --fact output/fact_employee_feedback.csv --by BU
 ```
+
+The `employee-voice` console script (legacy argparse) is also still
+available for backward compatibility.
 
 ## Layer enforcement (Layers 0-6)
 
