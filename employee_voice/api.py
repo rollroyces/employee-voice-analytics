@@ -57,6 +57,15 @@ from .privacy import (  # noqa: E402,F401
     KAnonymityConfig,
     apply_k_anonymity,
 )
+from .medallion import (  # noqa: E402,F401
+    ingest_bronze,
+    transform_silver,
+    score_gold,
+    analyze_medallion,
+    BRONZE_CONTRACT,
+    SILVER_CONTRACT,
+    GOLD_CONTRACT,
+)
 from .synth_data import generate_synthetic_dataset as _generate_synthetic  # noqa: E402,F401
 from .analyzers import score_risk as _score_risk_row  # noqa: E402,F401
 from .preprocess import clean_text, is_non_answer  # noqa: E402,F401
@@ -365,6 +374,55 @@ def analyze_spark(
 
 
 # ---------------------------------------------------------------------------
+# Medallion (Bronze / Silver / Gold)
+# ---------------------------------------------------------------------------
+def analyze_medallion(
+    df: pd.DataFrame,
+    *,
+    text_column: Optional[str] = None,
+    run_topics: bool = True,
+    redact: bool = False,
+    pii_backend: str = "regex",
+    k_anonymity: Optional[int] = None,
+    k_anonymity_group_by: Optional[Iterable[str]] = None,
+) -> dict:
+    """
+    Run the full pipeline as three explicit stages (Bronze / Silver
+    / Gold) and return each stage as a separate DataFrame.
+
+    Use this when you want to persist each stage to its own Delta
+    table — e.g. `bronze` to the landing zone, `silver` to a
+    curated analytics layer, and `gold` to the BI mart. The Silver
+    table can also be re-scored into Gold without re-running
+    sentiment inference, which is the operational win.
+
+    Returns
+    -------
+    dict
+        {
+            "bronze": pd.DataFrame,    # raw ingest, normalised
+            "silver": pd.DataFrame,    # + Sentiment, Category,
+                                       #   Emotion, Topic
+            "gold":   pd.DataFrame,    # + RiskScore, RiskBand,
+                                       #   PushFactors, PullFactors,
+                                       #   RiskVelocity (+ k-anon)
+            "silver_meta": dict,
+            "gold_meta":   dict,
+        }
+    """
+    from .medallion import analyze_medallion as _impl
+    return _impl(
+        df,
+        text_column=text_column,
+        run_topics=run_topics,
+        redact=redact,
+        pii_backend=pii_backend,
+        k_anonymity=k_anonymity,
+        k_anonymity_group_by=k_anonymity_group_by,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Per-layer building blocks
 # ---------------------------------------------------------------------------
 def scrub(text: Union[str, pd.Series], backend: str = "regex") -> Union[str, pd.Series]:
@@ -474,6 +532,13 @@ __all__ = [
     "analyze_feedback",
     "analyze_file",
     "analyze_spark",
+    "analyze_medallion",
+    "ingest_bronze",
+    "transform_silver",
+    "score_gold",
+    "BRONZE_CONTRACT",
+    "SILVER_CONTRACT",
+    "GOLD_CONTRACT",
     # Per-layer
     "scrub",
     "extract_aspects",

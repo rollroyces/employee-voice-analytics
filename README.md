@@ -43,17 +43,27 @@ Dual-licensed: AGPL-3.0-or-later + commercial — see
                  │  k-anonymity threshold (default 5)                    │
                  └─────────────────────────────────┬─────────────────────┘
                                                    │
-                 ┌─────────────────────────────────┴─────────────────────────────┐
-                 │                     Seven-layer pipeline                      │
-                 │  L0 preprocess  L1 sentiment  L2 category  L3 emotion         │
-                 │  L4 themes       L5 risk_score  L6 llm_summary                │
-                 └─────────────────────────────────┬─────────────────────────────┘
-                                                   │
-                 ┌─────────────────────────────────┴─────────────────────────────┐
-                 │                  Output — one fact table                     │
-                 │  fact_employee_feedback  dim_topic  summary_category  summary_bu  │
-                 │  + PushFactors, PullFactors, RiskVelocity (per-employee)     │
-                 └─────────────────────────────────┬─────────────────────────────┘
+        ┌──────────────────────────────────────────┴───────────────────────────────┐
+        │                  Medaillon (Bronze / Silver / Gold)                  │
+        │                                                                        │
+        │  ┌────────────┐   ┌────────────────┐   ┌────────────────────────┐    │
+        │  │  Bronze    │ → │    Silver      │ → │        Gold            │    │
+        │  │ ingest_    │   │  transform_     │   │     score_gold          │    │
+        │  │  bronze()  │   │   silver()      │   │                         │    │
+        │  │            │   │                 │   │  + RiskScore, RiskBand │    │
+        │  │ raw +      │   │  Layers 0-4:    │   │  + PushFactors,        │    │
+        │  │ normalised │   │  preprocess +   │   │    PullFactors         │    │
+        │  │ columns    │   │  sentiment +    │   │  + RiskVelocity        │    │
+        │  │            │   │  category +     │   │  + k-anonymity         │    │
+        │  │            │   │  emotion +      │   │  + optional LLM        │    │
+        │  │            │   │  themes         │   │    summary              │    │
+        │  │ Persist as │   │  Persist as     │   │  Persist as             │    │
+        │  │   bronze   │   │   silver        │   │   gold                  │    │
+        │  │   Delta    │   │   Delta         │   │   Delta                 │    │
+        │  └────────────┘   └────────────────┘   └────────────────────────┘    │
+        │       ↑                                       ↑                       │
+        │       └───── re-score without re-running sentiment ─────┘            │
+        └──────────────────────────────────────────────────────────────────────┘
                                                    │
                                                    ▼
                                 ┌──────────────────────────────┐
@@ -100,12 +110,17 @@ fact = employee_voice.analyze_feedback(
 print(fact[["FeedbackID", "Sentiment", "Category1", "RiskBand",
            "PushFactors", "PullFactors", "RiskVelocity"]].head())
 
-# File in / file out
-artifacts = employee_voice.analyze_file(
-    "data/feedback.csv", "output/",
-    redact=True, k_anonymity=5,
-)
-# artifacts["fact"], artifacts["fact_path"], artifacts["bu_path"], ...
+# Medaillon (Bronze / Silver / Gold) — for production Delta pipelines.
+# Silver is persisted; Gold is re-scored from Silver without re-running
+# the sentiment models. That's the operational win.
+stages = employee_voice.analyze_medallion(df, redact=True, k_anonymity=5)
+bronze, silver, gold = stages["bronze"], stages["silver"], stages["gold"]
+print(f"Bronze: {len(bronze)} rows, contract = {employee_voice.BRONZE_CONTRACT}")
+print(f"Silver: {len(silver)} rows, contract = {employee_voice.SILVER_CONTRACT}")
+print(f"Gold:   {len(gold)} rows, contract = {employee_voice.GOLD_CONTRACT}")
+
+# Re-score Gold from the same Silver (e.g. after a k-anonymity tweak).
+gold_again, _ = employee_voice.score_gold(silver, k_anonymity=5)
 
 # Per-layer building blocks
 redacted = employee_voice.scrub(df["Comment"], backend="regex")
@@ -114,13 +129,21 @@ factors  = employee_voice.detect_push_factors(comment)
 score, band = employee_voice.score_risk("negative", 0.9, "anger", 0.8,
                                        "Compensation(0.9)", "")
 
+# File in / file out
+artifacts = employee_voice.analyze_file(
+    "data/feedback.csv", "output/",
+    redact=True, k_anonymity=5,
+)
+
 # Spark DataFrame
 from employee_voice import analyze_spark
-enriched_sdf = analyze_spark(spark_df, mlflow_experiment="/Shared/eva")
+enriched_sdf = employee_voice.analyze_spark(spark_df, mlflow_experiment="/Shared/eva")
 
 # Synthetic data for tests / demos
 synth = employee_voice.generate_synthetic(n=250, seed=42)
 ```
+
+See `examples/quickstart.py` for a full walkthrough.
 
 ### CLI
 

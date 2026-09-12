@@ -5,13 +5,19 @@ theme / attrition-risk toolkit for HR feedback.
 Public Python API — the recommended way to use this from code:
 
     from employee_voice import (
-        analyze_feedback, analyze_file, analyze_spark,
+        analyze_feedback, analyze_file, analyze_spark, analyze_medallion,
+        ingest_bronze, transform_silver, score_gold,
         scrub, extract_aspects, score_risk, add_factors, add_risk_velocity,
         generate_synthetic,
     )
 
     # In-memory
     fact = analyze_feedback(my_df, redact=True, k_anonymity=5)
+
+    # Medallion (Bronze / Silver / Gold) for production Delta pipelines
+    stages = analyze_medallion(my_df)
+    silver, _ = transform_silver(stages["bronze"])
+    gold,   _ = score_gold(silver, k_anonymity=5)
 
     # From a file
     artifacts = analyze_file("data/feedback.csv", "output/")
@@ -37,6 +43,13 @@ from .api import (  # noqa: F401
     analyze_feedback,
     analyze_file,
     analyze_spark,
+    analyze_medallion,
+    ingest_bronze,
+    transform_silver,
+    score_gold,
+    BRONZE_CONTRACT,
+    SILVER_CONTRACT,
+    GOLD_CONTRACT,
     scrub,
     extract_aspects,
     detect_push_factors,
@@ -62,6 +75,13 @@ __all__ = [
     "analyze_feedback",
     "analyze_file",
     "analyze_spark",
+    "analyze_medallion",
+    "ingest_bronze",
+    "transform_silver",
+    "score_gold",
+    "BRONZE_CONTRACT",
+    "SILVER_CONTRACT",
+    "GOLD_CONTRACT",
     "scrub",
     "extract_aspects",
     "detect_push_factors",
