@@ -70,6 +70,9 @@ if dbutils is not None:
     dbutils.widgets.text("sheet", "", "XLSX sheet (blank = first)")
     dbutils.widgets.dropdown("run_topics", "true", ["true", "false"], "Run topic discovery")
     dbutils.widgets.dropdown("run_summary", "false", ["true", "false"], "LLM exec summary")
+    dbutils.widgets.dropdown("use_spark_udfs", "true", ["true", "false"],
+                             "Use pandas_udf(SCALAR_ITER) path (recommended for >10k rows)")
+    dbutils.widgets.text("mlflow_experiment", "", "MLflow experiment path (blank = off)")
 
 def _w(name: str, default: str = "") -> str:
     if dbutils is None:
@@ -86,6 +89,8 @@ TEXT_COLUMN = _w("text_column", "") or None
 SHEET = _w("sheet", "") or None
 RUN_TOPICS = _w("run_topics", "true").lower() == "true"
 RUN_SUMMARY = _w("run_summary", "false").lower() == "true"
+USE_SPARK_UDFS = _w("use_spark_udfs", "true").lower() == "true"
+MLFLOW_EXPERIMENT = _w("mlflow_experiment", "") or None
 
 print(f"INPUT_PATH        = {INPUT_PATH}")
 print(f"OUTPUT_CATALOG    = {OUTPUT_CATALOG or '(none)'}")
@@ -94,6 +99,8 @@ print(f"TEXT_COLUMN       = {TEXT_COLUMN or '(auto)'}")
 print(f"SHEET             = {SHEET or '(first)'}")
 print(f"RUN_TOPICS        = {RUN_TOPICS}")
 print(f"RUN_SUMMARY       = {RUN_SUMMARY}")
+print(f"USE_SPARK_UDFS    = {USE_SPARK_UDFS}")
+print(f"MLFLOW_EXPERIMENT = {MLFLOW_EXPERIMENT or '(off)'}")
 
 # COMMAND ----------
 
@@ -204,80 +211,112 @@ print("Row count:", sdf.count())
 # enriched Spark DataFrame back. For >1M comments, refactor to a Pandas UDF
 # that loads HF pipelines lazily inside the function — see TODO at the end.
 
-_PASSTHROUGH = ["FeedbackID", "SurveyType", "SurveyDate", "BU", "Dept", "EmployeeGroup", "Comment"]
+_PASSTHROUGH = ["FeedbackID", "SurveyType", "SurveyDate", "EmployeeID", "BU", "Dept", "EmployeeGroup", "Comment"]
 
-pdf = sdf.select(*[c for c in _PASSTHROUGH if c in sdf.columns]).toPandas()
-pdf["Comment"] = pdf["Comment"].fillna("").astype(str)
+# Two execution paths:
+#   - USE_SPARK_UDFS=True (recommended for >10k rows): pandas_udf(SCALAR_ITER)
+#     so sentiment / category / emotion / risk run on the executors in
+#     parallel. Falls back to lexicon engines if transformers is not
+#     installed on the cluster.
+#   - USE_SPARK_UDFS=False: driver-side path. The full table is
+#     collected to the driver, run_all_layers() runs there, and the
+#     enriched pandas frame is wrapped back into Spark. Simpler to
+#     debug but doesn't scale.
+if USE_SPARK_UDFS:
+    from employee_voice.spark_pipeline import run_spark
+    from employee_voice import spark_udfs as _spark_udfs
+    _spark_udfs.register_pii_udf(spark)
+    _spark_udfs.register_nlp_udfs(spark)
+    _spark_udfs.register_factor_udfs(spark)
+    _spark_udfs.register_risk_udf(spark)
+    fact_sdf = run_spark(
+        sdf.select(*[c for c in _PASSTHROUGH if c in sdf.columns]),
+        text_column="Comment",
+        run_topics=RUN_TOPICS,
+        mlflow_experiment=MLFLOW_EXPERIMENT,
+    )
+    pdf = fact_sdf.toPandas()
+    meta = {}  # topic_meta populated below from the joined dim_topic
+    # Re-derive topic_meta from the fact_sdf so dim_topic.csv gets the
+    # same structure as the local pipeline.
+    if "Topic" in fact_sdf.columns and "TopicName" in fact_sdf.columns:
+        from pyspark.sql.types import IntegerType, StringType
+        meta_sdf = fact_sdf.groupBy("Topic", "TopicName", "TopicKeywords").count()
+        for row in meta_sdf.collect():
+            meta[int(row["Topic"])] = {
+                "Name": row["TopicName"] or "",
+                "Keywords": (row["TopicKeywords"] or "").split(","),
+                "Count": int(row["count"]),
+            }
+else:
+    pdf = sdf.select(*[c for c in _PASSTHROUGH if c in sdf.columns]).toPandas()
+    pdf["Comment"] = pdf["Comment"].fillna("").astype(str)
 
-# Run Layers 0-5 under the same contract as the local pipeline. Raises
-# LayerDependencyError on missing deps and LayerContractError on schema
-# violations. The notebook's RUN_TOPICS widget selects whether Layer 4
-# is in scope; Layer 6 is invoked separately via RUN_SUMMARY below.
-layered = run_all_layers(
-    pdf,
-    outdir="dbfs:/FileStore/employee_voice/output",
-    run_topics=RUN_TOPICS,
-    run_summary_layer=False,
-)
-pdf = layered["df"]
-meta = layered["topic_meta"]
+    # Run Layers 0-5 under the same contract as the local pipeline. Raises
+    # LayerDependencyError on missing deps and LayerContractError on schema
+    # violations. The notebook's RUN_TOPICS widget selects whether Layer 4
+    # is in scope; Layer 6 is invoked separately via RUN_SUMMARY below.
+    layered = run_all_layers(
+        pdf,
+        outdir="dbfs:/FileStore/employee_voice/output",
+        run_topics=RUN_TOPICS,
+        run_summary_layer=False,
+    )
+    pdf = layered["df"]
+    meta = layered["topic_meta"]
 
 # COMMAND ----------
 
-# Wrap back into Spark and write four outputs: fact, dim_topic, summary_category, summary_bu.
-fact_schema = StructType([
-    StructField("FeedbackID", StringType()),
-    StructField("SurveyType", StringType()),
-    StructField("SurveyDate", StringType()),  # keep as string to avoid pandas/Spark date tz friction
-    StructField("BU", StringType()),
-    StructField("Dept", StringType()),
-    StructField("EmployeeGroup", StringType()),
-    StructField("Comment", StringType()),
-    StructField("CleanComment", StringType()),
-    StructField("Sentiment", StringType()),
-    StructField("SentimentScore", DoubleType()),
-    StructField("Category1", StringType()),
-    StructField("Category1Score", DoubleType()),
-    StructField("Category2", StringType()),
-    StructField("Category2Score", DoubleType()),
-    StructField("AllCategories", StringType()),
-    StructField("Emotion", StringType()),
-    StructField("EmotionScore", DoubleType()),
-    StructField("Topic", IntegerType()),
-    StructField("TopicName", StringType()),
-    StructField("TopicKeywords", StringType()),
-    StructField("RiskScore", DoubleType()),
-    StructField("RiskBand", StringType()),
-])
+# Wrap back into Spark and write the fact table. Two paths:
+#   - USE_SPARK_UDFS=True: fact_sdf is already a properly-typed Spark
+#     DataFrame from run_spark(); skip the schema cast.
+#   - USE_SPARK_UDFS=False: rebuild fact_sdf from the pandas frame with
+#     explicit schema (needed for IntegerType(Topic), etc.)
+if not USE_SPARK_UDFS:
+    fact_schema = StructType([
+        StructField("FeedbackID", StringType()),
+        StructField("SurveyType", StringType()),
+        StructField("SurveyDate", StringType()),
+        StructField("BU", StringType()),
+        StructField("Dept", StringType()),
+        StructField("EmployeeGroup", StringType()),
+        StructField("Comment", StringType()),
+        StructField("CleanComment", StringType()),
+        StructField("Sentiment", StringType()),
+        StructField("SentimentScore", DoubleType()),
+        StructField("Category1", StringType()),
+        StructField("Category1Score", DoubleType()),
+        StructField("Category2", StringType()),
+        StructField("Category2Score", DoubleType()),
+        StructField("AllCategories", StringType()),
+        StructField("Emotion", StringType()),
+        StructField("EmotionScore", DoubleType()),
+        StructField("Topic", IntegerType()),
+        StructField("TopicName", StringType()),
+        StructField("TopicKeywords", StringType()),
+        StructField("RiskScore", DoubleType()),
+        StructField("RiskBand", StringType()),
+    ])
 
-# Cast columns that may have come back as object/NaN.
-for col, dtype in (("SentimentScore", "float64"), ("Category1Score", "float64"),
-                   ("Category2Score", "float64"), ("EmotionScore", "float64"),
-                   ("RiskScore", "float64")):
-    if col in pdf.columns:
-        pdf[col] = pd.to_numeric(pdf[col], errors="coerce").fillna(0.0)
-for col in ("Topic",):
-    if col in pdf.columns:
-        # Cast to Int64 first, then unwrap the pandas extension dtype into a
-        # plain object column of native ints + None. PySpark's createDataFrame
-        # does not understand pd.NA / pandas extension arrays in 4.x and would
-        # otherwise coerce the column to float64 and fail the IntegerType
-        # schema check. Converting here keeps the schema honest.
-        pdf[col] = pd.to_numeric(pdf[col], errors="coerce").astype("Int64")
-        pdf[col] = pdf[col].astype("object").where(pdf[col].notna(), None)
+    for col, dtype in (("SentimentScore", "float64"), ("Category1Score", "float64"),
+                       ("Category2Score", "float64"), ("EmotionScore", "float64"),
+                       ("RiskScore", "float64")):
+        if col in pdf.columns:
+            pdf[col] = pd.to_numeric(pdf[col], errors="coerce").fillna(0.0)
+    for col in ("Topic",):
+        if col in pdf.columns:
+            pdf[col] = pd.to_numeric(pdf[col], errors="coerce").astype("Int64")
+            pdf[col] = pdf[col].astype("object").where(pdf[col].notna(), None)
 
-# Cast SurveyDate to ISO string for Spark.
-if "SurveyDate" in pdf.columns:
-    pdf["SurveyDate"] = pd.to_datetime(pdf["SurveyDate"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "SurveyDate" in pdf.columns:
+        pdf["SurveyDate"] = pd.to_datetime(pdf["SurveyDate"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-fact_pdf = pdf[[f.name for f in fact_schema.fields if f.name in pdf.columns]].copy()
-# Add any missing columns with nulls so Spark schema matches.
-for f in fact_schema.fields:
-    if f.name not in fact_pdf.columns:
-        fact_pdf[f.name] = None
-
-fact_pdf = fact_pdf[[f.name for f in fact_schema.fields]]
-fact_sdf = spark.createDataFrame(fact_pdf, schema=fact_schema)
+    fact_pdf = pdf[[f.name for f in fact_schema.fields if f.name in pdf.columns]].copy()
+    for f in fact_schema.fields:
+        if f.name not in fact_pdf.columns:
+            fact_pdf[f.name] = None
+    fact_pdf = fact_pdf[[f.name for f in fact_schema.fields]]
+    fact_sdf = spark.createDataFrame(fact_pdf, schema=fact_schema)
 
 # Write the fact table.
 if OUTPUT_CATALOG:
