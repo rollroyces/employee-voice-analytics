@@ -49,9 +49,19 @@ topics = [
 ]
 # Optional Azure OpenAI exec summary.
 llm = ["openai>=1.30"]
+# Presidio + spaCy NER for higher-accuracy PII redaction.
+privacy = [
+    "presidio-analyzer[transformers]>=2.2",
+    "spacy>=3.7",
+]
+# Rich + Typer CLI surface (eva command).
+cli = [
+    "typer>=0.12",
+    "rich>=13.7",
+]
 # Everything that makes the package production-shaped.
 all = [
-    "employee-voice-analytics[ml,topics,llm]",
+    "employee-voice-analytics[ml,topics,llm,privacy,cli]",
 ]
 # Databricks / PySpark runtime for the notebook.
 databricks = ["pyspark>=3.5", "delta-spark>=3.0"]
@@ -61,6 +71,12 @@ dev = [
     "pyspark>=3.5",
     "delta-spark>=3.0",
     "openai>=1.30",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+# A minimal local-only install (CLI + fallback engines + privacy via regex).
+local = [
+    "employee-voice-analytics[cli,privacy]",
 ]
 
 [project.urls]
@@ -69,10 +85,11 @@ Repository = "https://github.com/rollroyces/employee-voice-analytics"
 Issues = "https://github.com/rollroyces/employee-voice-analytics/issues"
 
 [project.scripts]
-# After `pip install employee-voice-analytics`, the CLI is on PATH as
-# `employee-voice` (hyphen, like the repo name). The original `run_pipeline.py`
-# is kept as a thin shim for backwards compatibility.
+# After `pip install employee-voice-analytics`, both CLIs are on PATH:
+#   - employee-voice  (legacy argparse CLI)
+#   - eva              (new Typer + Rich CLI; preferred)
 employee-voice = "employee_voice.cli:main"
+eva = "employee_voice.typer_cli:cli_main"
 
 [tool.setuptools]
 # Pull in everything under employee_voice/ automatically — no manual list.
