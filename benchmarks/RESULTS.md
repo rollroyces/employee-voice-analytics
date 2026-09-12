@@ -32,10 +32,10 @@ The category layer is the bottleneck. Distilling BART-MNLI to a smaller NLI mode
 
 | model | params | rows/sec | vs BART |
 |---|---:|---:|---:|
-| `facebook/bart-large-mnli` (default) | 400M | 1.5 | 1.0× |
-| `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | 140M | 3.8 | 2.5× |
-| `cross-encoder/nli-deberta-v3-small` | 140M | 4.1 | 2.7× |
-| `typeform/distilbert-base-uncased-mnli` | 70M | 7.9 | **5.3×** |
+| `facebook/bart-large-mnli` (default) | 400M | 1.6 | 1.0× |
+| `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` | 140M | 3.7 | 2.3× |
+| `cross-encoder/nli-deberta-v3-small` | 140M | 4.4 | 2.8× |
+| `typeform/distilbert-base-uncased-mnli` | 70M | 9.4 | **5.9×** |
 
 `typeform/distilbert-base-uncased-mnli` is the practical sweet spot when single-machine throughput matters more than top-1 accuracy. Set `CATEGORY_MODEL_ID` in `config.py` to switch.
 
