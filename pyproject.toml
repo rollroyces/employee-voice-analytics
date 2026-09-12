@@ -104,11 +104,17 @@ include = ["employee_voice*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-# Default to skipping the Databricks notebook test (it needs Java +
-# PySpark + delta-spark). Run it explicitly with `pytest -m databricks`.
-addopts = "-ra -q -m 'not databricks and not bench'"
+# Default to skipping the slow tests:
+#  - databricks: needs Java + PySpark + delta-spark
+#  - bench: full benchmark suite (~minutes, downloads models)
+#  - bench_smoke: fast smoke test for the bench (~100s, downloads models)
+# Run them explicitly with `pytest -m <marker>`. The CI workflow
+# in .github/workflows/benchmarks.yml opts in to the smoke test.
+addopts = "-ra -q -m 'not databricks and not bench and not bench_smoke and not accuracy_bench'"
 testpaths = ["tests"]
 markers = [
     "databricks: tests that require Java + PySpark (run explicitly with `pytest -m databricks`)",
-    "bench: smoke benchmark; slow on CI, run with `pytest -m bench`",
+    "bench: full benchmark suite; slow on CI, run with `pytest -m bench`",
+    "bench_smoke: smoke test for the category bench; ~100s, downloads models",
+    "accuracy_bench: smoke test for the accuracy proxy bench; ~30s, downloads SetFit + NLI models",
 ]

@@ -130,6 +130,59 @@ jobs:
           name: bench-category-models
           path: benchmarks/results_category_models.{md,csv}
 
+  # Smoke test for the accuracy bench — runs on every PR. ~50s.
+  # Catches regressions in the SetFit API or the bench harness.
+  bench-accuracy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (incl. ML deps + SetFit)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,ml]'
+          pip install setfit
+      - name: Run accuracy bench smoke test
+        run: |
+          pytest -m accuracy_bench -v --no-header
+      - name: Upload accuracy results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-accuracy
+          path: benchmarks/results_category_accuracy.{md,csv}
+
+  # Smoke test for the category bench — runs on every PR. ~100s.
+  # Catches parser regressions and silent-zero-elapsed failures
+  # without paying the full bench cost. Adds the smoke test job
+  # to PR CI so a parser regression can't ship.
+  bench-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (incl. ML deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev,ml]'
+      - name: Run bench smoke test
+        run: |
+          pytest -m bench_smoke -v --no-header
+      - name: Upload smoke results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-smoke
+          path: benchmarks/results_category_models.{md,csv}
+
   # Optional: comment on PR with the lexicon speedup.
   comment-lexicon:
     runs-on: ubuntu-latest

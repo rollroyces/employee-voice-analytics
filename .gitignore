@@ -11,3 +11,7 @@ build/
 dist/
 .DS_Store
 *.egg
+# SetFit training output (full precision weights, not for git)
+checkpoints/
+# HuggingFace model cache
+.cache/

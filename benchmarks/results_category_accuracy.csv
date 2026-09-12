@@ -1,0 +1,4 @@
+model,approach,accuracy,n_scored,n_matched,elapsed_sec
+facebook/bart-large-mnli,zero-shot,0.6,60,36,49.40630549984053
+typeform/distilbert-base-uncased-mnli,zero-shot,0.48333333333333334,60,29,14.565110291121528
+SetFit/all-MiniLM-L6-v2 (20-shot),few-shot,0.8974358974358975,39,35,14.205249791964889

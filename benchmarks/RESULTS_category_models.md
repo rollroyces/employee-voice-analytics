@@ -6,10 +6,10 @@ Category is the bottleneck in the HF backend (see `benchmarks/RESULTS_hf.md`). T
 
 | model | rows | elapsed sec | rows/sec | accuracy proxy |
 |---|---:|---:|---:|---:|
-| `bart-large-mnli (400M, baseline)` (facebook/bart-large-mnli) | 50 | 30.64 | 1.6 | n/a |
-| `deberta-v3-base-mnli (140M)` (MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli) | 50 | 13.53 | 3.7 | n/a |
-| `deberta-v3-small (140M)` (cross-encoder/nli-deberta-v3-small) | 50 | 11.33 | 4.4 | n/a |
-| `distilbert-base-mnli (70M)` (typeform/distilbert-base-uncased-mnli) | 50 | 5.31 | 9.4 | n/a |
+| `bart-large-mnli (400M, baseline)` (facebook/bart-large-mnli) | 50 | 39.19 | 1.3 | n/a |
+| `deberta-v3-base-mnli (140M)` (MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli) | 50 | 16.68 | 3.0 | n/a |
+| `deberta-v3-small (140M)` (cross-encoder/nli-deberta-v3-small) | 50 | 13.79 | 3.6 | n/a |
+| `distilbert-base-mnli (70M)` (typeform/distilbert-base-uncased-mnli) | 50 | 7.57 | 6.6 | n/a |
 
 ## Reading the accuracy proxy
 
