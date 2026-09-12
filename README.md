@@ -1,52 +1,120 @@
 # Employee Voice Analytics
 
-Reusable toolkit for sentiment + category + emotion + theme discovery +
-attrition-risk scoring on exit interviews, staff surveys and pulse surveys.
+Reusable, dual-runtime (Local CLI + Databricks Spark) toolkit that turns
+unstructured employee feedback (exit interviews, annual surveys, pulse
+checks, Glassdoor comments) into structured HR signals:
 
-A single pipeline. One fact table. Drop the CSVs into Power BI.
+1. **Multi-aspect sentiment + GoEmotions taxonomy** — positive /
+   neutral / negative, then 28 fine-grained emotions, then per-aspect
+   (Compensation, Manager, Team, Workload, Growth, Tools, Culture,
+   WorkLifeBalance).
+2. **HR taxonomy classification** — zero-shot against a configurable
+   taxonomy (Compensation, Leadership, Workload, DE&I, Career Growth,
+   Tools, …).
+3. **Dynamic thematic discovery** — BERTopic / KeyBERT.
+4. **Qualitative flight-risk indicators** — push / pull factor flags,
+   q-over-q risk velocity, and a 0-100 RiskScore + RiskBand.
+5. **Enterprise privacy guardrails** — PII scrubber (regex or
+   Presidio) and k-anonymity suppression for under-threshold slices.
 
-## Layout
+Dual-licensed: AGPL-3.0-or-later + commercial — see
+[`LICENSE`](./LICENSE) and [`COMMERCIAL_LICENSE.md`](./COMMERCIAL_LICENSE.md).
+
+## Architecture
 
 ```
-employee_voice/
-    __init__.py
-    config.py        taxonomy, model ids, risk weights   <-- edit this first
-    preprocess.py    cleaning, "N/A" noise filtering
-    analyzers.py     sentiment / category / emotion / risk score
-    topics.py        BERTopic (fallback: TF-IDF + KMeans)
-    layers.py        strict layer runner + schema-contract enforcement
-    _errors.py       shared exception types
-    pipeline.py      orchestration -> fact_employee_feedback
-    cli.py           argparse CLI (installed as `employee-voice` script)
-    summarizer.py    optional Azure OpenAI exec summary
-    py.typed         PEP 561 marker for type checkers
-databricks_notebook.py   PySpark / Databricks version
-run_pipeline.py     thin shim -> employee_voice.cli.main
-data/sample_feedback.csv
-tests/
-    conftest.py
-    test_analyzers.py        unit tests (fallback engines)
-    test_pipeline.py         integration tests
-    test_layers.py           layer-enforcement: deps, ordering, contracts
-    test_notebook_local.py   marked @pytest.mark.databricks
-pyproject.toml      package metadata, console script, optional deps
-requirements.txt    mirrors pyproject.toml core deps
+                              ┌──────────────────────────────────────────────┐
+                              │          Input (any of these)               │
+                              │   CSV / XLSX / JSON / Parquet / Delta       │
+                              └────────────────────┬─────────────────────────┘
+                                                   │
+                  ┌────────────────────────────────┼─────────────────────────────┐
+                  │                                │                             │
+                  ▼                                ▼                             ▼
+        ┌──────────────────┐              ┌──────────────────┐        ┌──────────────────┐
+        │  Local CLI       │              │  Databricks       │        │  Synthetic data  │
+        │  python -m       │              │  Notebooks         │        │  generator       │
+        │  employee_voice  │              │  databricks_       │        │  eva generate-   │
+        │  eva analyze     │              │  notebook.py       │        │  sample          │
+        └────────┬─────────┘              └────────┬──────────┘        └──────────────────┘
+                 │                                 │
+                 │            Privacy layer (Layer 0.5)                  │
+                 │  PIIScrubber: regex or Presidio+spaCy                │
+                 │  k-anonymity threshold (default 5)                    │
+                 └─────────────────────────────────┬─────────────────────┘
+                                                   │
+                 ┌─────────────────────────────────┴─────────────────────────────┐
+                 │                     Seven-layer pipeline                      │
+                 │  L0 preprocess  L1 sentiment  L2 category  L3 emotion         │
+                 │  L4 themes       L5 risk_score  L6 llm_summary                │
+                 └─────────────────────────────────┬─────────────────────────────┘
+                                                   │
+                 ┌─────────────────────────────────┴─────────────────────────────┐
+                 │                  Output — one fact table                     │
+                 │  fact_employee_feedback  dim_topic  summary_category  summary_bu  │
+                 │  + PushFactors, PullFactors, RiskVelocity (per-employee)     │
+                 └─────────────────────────────────┬─────────────────────────────┘
+                                                   │
+                                                   ▼
+                                ┌──────────────────────────────┐
+                                │  Power BI / Tableau / ML     │
+                                └──────────────────────────────┘
+```
+
+## Install
+
+```bash
+# Minimal local install — CLI + fallback engines + regex PII scrubber.
+# No model downloads, runs offline.
+pip install employee-voice-analytics[local]
+
+# Production install — adds HuggingFace, BERTopic, Azure OpenAI, Presidio.
+pip install employee-voice-analytics[all]
+
+# Databricks / PySpark runtime for the notebook.
+pip install employee-voice-analytics[databricks]
+
+# Dev / test toolchain.
+pip install employee-voice-analytics[dev]
+```
+
+After install both `eva` (Typer + Rich) and `employee-voice` (legacy
+argparse) are on `$PATH`.
+
+## Quick start
+
+```bash
+# Generate a realistic synthetic HR dataset (250 rows, 4 personas).
+eva generate-sample --rows 250 --out data/sample_feedback_synth.csv
+
+# Run the full pipeline on the bundled sample.
+eva analyze --input data/sample_feedback_synth.csv --outdir output
+
+# With PII redaction + k-anonymity suppression.
+eva analyze \
+    --input data/sample_feedback_synth.csv \
+    --outdir output \
+    --redact-pii \
+    --pii-backend presidio \
+    --k-anonymity 5
+
+# Inspect a finished fact table in the terminal.
+eva dashboard --fact output/fact_employee_feedback.csv --by BU
 ```
 
 ## Layer enforcement (Layers 0-6)
 
-The pipeline runs **all seven layers in a fixed order** and verifies the
-output schema matches `LAYER_CONTRACTS` in `config.py`:
-
 | # | Layer | Required columns | Runtime deps |
 |---|---|---|---|
 | 0 | preprocess | `Comment`, `CleanComment` | (none) |
-| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` |
-| 2 | category  | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` |
-| 3 | emotion   | `Emotion`, `EmotionScore` | `transformers`, `torch` |
-| 4 | themes    | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` |
-| 5 | risk score | `RiskScore`, `RiskBand` | (none) |
-| 6 | llm summary | (writes side files) | `openai` |
+| 0.5 | privacy | `CleanComment` (redacted) | regex: none; presidio: `[privacy]` extra |
+| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` (or fallback) |
+| 2 | category | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` (or fallback) |
+| 3 | emotion | `Emotion`, `EmotionScore` | `transformers`, `torch` (or fallback) |
+| 4 | themes | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` (or TF-IDF + KMeans) |
+| 5 | risk_score | `RiskScore`, `RiskBand`, `PushFactors`, `PullFactors` | (none) |
+| 5b | risk_velocity | `RiskVelocity` | (none; null if `EmployeeID`/`SurveyDate` missing) |
+| 6 | llm_summary | (writes side files) | `openai` |
 
 If a layer's dependency is missing, the pipeline raises
 `LayerDependencyError` with the matching `pip install` command. To use
@@ -56,129 +124,133 @@ approved), opt in explicitly:
 
 ```bash
 export EMPLOYEE_VOICE_ALLOW_FALLBACK=1
-employee-voice --input data/sample_feedback.csv --outdir output
-```
-
-Or programmatically:
-
-```python
-from employee_voice import layers
-layers.set_allow_fallback(True)
-from employee_voice.pipeline import run
-run("data/sample_feedback.csv", "output")
+eva analyze --input data/sample_feedback.csv --outdir output
 ```
 
 If a layer's runner fails to populate a required column, the pipeline
 raises `LayerContractError` instead of silently emitting nulls.
 
-## Install
+## Privacy guardrails
 
-```bash
-# Minimal: fallback engines only (no model downloads).
-pip install employee-voice-analytics
+- **PII scrubber.** `PIIScrubber(backend="regex")` (default) redacts
+  emails, phone numbers, SSN, employee IDs, and project codenames
+  with no model download. `PIIScrubber(backend="presidio")` uses spaCy
+  NER for higher accuracy. Manager context (within 30 chars of
+  "manager", "supervisor", etc.) promotes a `PERSON` entity to
+  `[MANAGER_NAME]`. Required for any pipeline that sends text to
+  external LLM providers.
+- **k-anonymity.** Slices (BU × Dept) below the threshold (default 5)
+  have their verbatim comments blanked in the fact table; numeric
+  score columns are preserved so aggregate dashboards still work.
+  Configurable via `--k-anonymity` on `eva analyze`.
 
-# With HuggingFace models for Layers 1-4:
-pip install 'employee-voice-analytics[ml,topics]'
+## Databricks / PySpark
 
-# Everything including Azure OpenAI + Databricks extras:
-pip install 'employee-voice-analytics[all,databricks]'
-```
+The `databricks_notebook.py` is a notebook-shaped driver. Two
+execution paths, gated by a widget:
 
-After install the `employee-voice` console script is on `$PATH`.
+| Widget | Default | Behaviour |
+|---|---|---|
+| `use_spark_udfs` | `true` | `pandas_udf(SCALAR_ITER)` — sentiment / category / emotion / risk run on the executors in parallel. Each executor loads one HF pipeline and reuses it. |
+| `use_spark_udfs` | `false` | Driver-side: collect to driver, run `run_all_layers`, write enriched frame back. Simpler to debug; doesn't scale. |
+| `mlflow_experiment` | empty | When set, MLflow tracks input row count, output row count, and a pipeline tag. |
 
-## Quick start
+### Cluster deployment
 
-```bash
-# If installed via pip:
-employee-voice --input data/sample_feedback.csv --outdir output
+1. **Cluster libraries:** `pip install employee-voice-analytics[all,databricks]`
+   in the cluster's init script or via a cluster library. The
+   `[databricks]` extra pulls PySpark + delta-spark; `[all]` adds the
+   HF models (HuggingFace caches them on the cluster on first use).
+2. **MLflow:** the `mlflow` package is preinstalled on Databricks
+   runtimes; if you're on a custom image, `pip install mlflow` in
+   the init script.
+3. **Mount the notebook** via Repos or workspace import.
+4. **Run All** with the widget defaults, or override per-Job:
+   ```
+   input_path      dbfs:/mnt/hr/silver/employee_feedback
+   output_catalog  hr_prod
+   output_database gold
+   text_column     Comment
+   run_topics      true
+   run_summary     false
+   use_spark_udfs  true
+   mlflow_experiment /Shared/employee-voice-analytics
+   ```
+5. **Schedule** with a Databricks Job pointing at the notebook.
 
-# If running from a source clone without installing:
-python -m employee_voice --input data/sample_feedback.csv --outdir output
-# (legacy: `python run_pipeline.py ...` still works)
-```
-
-Your own file:
-
-```bash
-employee-voice --input survey.xlsx --sheet "Responses" --text-column "Q7_Comments"
-```
+The Spark runtime writes the same four artifacts as the local CLI
+(`fact_employee_feedback`, `dim_topic`, `summary_category`,
+`summary_bu`) — Delta tables when `output_catalog` is set, Delta /
+Parquet files under `dbfs:/FileStore/employee_voice/output/` otherwise.
 
 ## Tests
 
 ```bash
 pip install 'employee-voice-analytics[dev]'
-pytest                       # unit + integration (~3 s, no Java needed)
-pytest -m databricks         # also runs the notebook locally (needs Java + pyspark + delta-spark)
+pytest                       # unit + integration (~17 s, no Java needed)
+pytest -m databricks         # also runs the notebook locally (needs Java + PySpark + delta-spark)
 ```
-
-## Databricks / PySpark
-
-```bash
-# In a Databricks notebook (or `python databricks_notebook.py`):
-#   1. Attach the wheel: `pip install /path/to/employee_voice_analytics-0.1.0-py3-none-any.whl[databricks]`
-#      (or `%pip install -e .` from a source clone).
-#   2. Set widgets in the Job UI or leave defaults.
-#   3. Run All.
-```
-
-Writes Delta tables (`{catalog}.{database}.fact_employee_feedback`,
-`dim_topic`, `summary_category`, `summary_bu`) when `output_catalog` is set,
-or Delta/Parquet files under `dbfs:/FileStore/employee_voice/output/` otherwise.
-
-## Models
-
-| Layer | Model | Purpose |
-|---|---|---|
-| Sentiment | `cardiffnlp/twitter-roberta-base-sentiment-latest` | Positive / Neutral / Negative |
-| Category | `facebook/bart-large-mnli` | zero-shot against the HR taxonomy |
-| Emotion | `SamLowe/roberta-base-go_emotions` | 28 emotions |
-| Themes | BERTopic + `all-MiniLM-L6-v2` | unsupervised theme discovery |
-
-**Fallback mode:** if `transformers` / `bertopic` are not installed, the toolkit
-automatically switches to keyword + TF-IDF/KMeans engines. Output columns are
-identical, so you can build the Power BI model first and upgrade later.
-
-## Output — `fact_employee_feedback`
-
-| Column | Notes |
-|---|---|
-| FeedbackID, SurveyType, SurveyDate, BU, Dept, EmployeeGroup | passed through from source |
-| Comment, CleanComment | raw + cleaned |
-| Sentiment, SentimentScore | `No Comment` for filtered non-answers |
-| Category1/2 + scores, AllCategories | top-2 above `CATEGORY_MIN_SCORE` |
-| Emotion, EmotionScore | |
-| Topic, TopicName, TopicKeywords | join key to `dim_topic` |
-| RiskScore (0–100), RiskBand | High ≥70, Medium ≥40, Low |
-
-Plus `dim_topic.csv`, `summary_category.csv`, `summary_bu.csv`.
-
-## Risk scoring
-
-| Signal | Points |
-|---|---|
-| Negative sentiment | 40 × confidence |
-| High-risk category matched (Compensation, Career, Leadership, Management, WLB) | 20 each, max 2 |
-| Negative emotion (anger, disappointment, fear, …) | 20 |
-| Intent-to-leave keyword | 30 |
-
-Capped at 100. All weights live in `config.py`.
 
 ## Adapting to your company
 
-1. Replace `CATEGORIES` and `HIGH_RISK_CATEGORIES` in `config.py` with your
-   own taxonomy (1-3 word labels work best for zero-shot).
-2. Replace `CATEGORY_KEYWORDS` in `analyzers.py` to match the same taxonomy
-   (used by the fallback engine).
-3. Add company-specific intent-to-leave phrases to `INTENT_TO_LEAVE_KEYWORDS`.
-4. Label ~200 historical comments, measure accuracy of the zero-shot categories,
-   then fine-tune with SetFit (20-50 examples per category) and swap the
-   model id in `config.py`.
-5. Add local-language comments — if volume is material, switch sentiment
-   to a multilingual model (e.g. `cardiffnlp/twitter-xlm-roberta-base-sentiment`).
+1. Replace `CATEGORIES` and `HIGH_RISK_CATEGORIES` in `config.py` with
+   your own HR taxonomy (1-3 word labels work best for zero-shot).
+2. Replace `CATEGORY_KEYWORDS` in `analyzers.py` to match the same
+   taxonomy (used by the fallback engine).
+3. Extend `PUSH_FACTORS` / `PULL_FACTORS` in `risk_signals.py` with
+   your locale / role-specific phrases.
+4. Add company-specific intent-to-leave phrases to
+   `INTENT_TO_LEAVE_KEYWORDS` in `config.py`.
+5. Label ~200 historical comments, measure accuracy of the
+   zero-shot categories, then fine-tune with SetFit (20-50 examples
+   per category) and swap the model id in `config.py`.
+6. Add local-language comments — if volume is material, switch
+   sentiment to a multilingual model.
+
+## File layout
+
+```
+employee_voice/
+    __init__.py
+    config.py        taxonomy, model ids, risk weights, layer contracts
+    privacy.py       PII scrubber (regex + Presidio) + k-anonymity
+    preprocess.py    cleaning, N/A noise filtering
+    analyzers.py     sentiment / category / emotion / risk score
+    absa.py          aspect-based sentiment (per-aspect polarity)
+    risk_signals.py  push/pull factors + q-over-q risk velocity
+    topics.py        BERTopic (fallback: TF-IDF + KMeans)
+    layers.py        strict layer runner + schema-contract enforcement
+    _errors.py       shared exception types
+    pipeline.py      orchestration -> fact_employee_feedback
+    spark_pipeline.py    PySpark / pandas_udf runtime
+    spark_udfs.py        per-executor UDF definitions
+    cli.py           legacy argparse CLI (installed as `employee-voice`)
+    typer_cli.py     new Typer + Rich CLI (installed as `eva`)
+    summarizer.py    optional Azure OpenAI exec summary
+    synth_data.py    4-persona synthetic HR feedback generator
+    py.typed         PEP 561 marker for type checkers
+databricks_notebook.py        notebook driver (Spark + Delta)
+data/sample_feedback.csv      20-row hand-written sample
+tests/                         pytest suite (129 tests)
+    conftest.py
+    test_analyzers.py
+    test_pipeline.py
+    test_layers.py
+    test_privacy.py
+    test_absa.py
+    test_risk_signals.py
+    test_spark_pipeline.py
+    test_synth_data.py
+    test_typer_cli.py
+    test_notebook_local.py   marked @pytest.mark.databricks
+pyproject.toml                 package metadata, console scripts, extras
+requirements.txt              mirrors pyproject.toml core deps
+LICENSE, COMMERCIAL_LICENSE.md, README.md
+```
 
 ## Privacy
 
 Exit-interview and survey comments are sensitive. Keep fact tables in a
-restricted workspace, avoid surfacing free-text at individual level in Power BI
-(aggregate to team size ≥5), and confirm the data-handling position before the
-first production run.
+restricted workspace, avoid surfacing free-text at individual level in
+Power BI (aggregate to team size ≥5), and confirm the data-handling
+position before the first production run.
