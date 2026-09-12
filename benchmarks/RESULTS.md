@@ -16,15 +16,15 @@ Re-scoring Gold from a persisted Silver table (after risk-weight or k-anonymity 
 
 | Layer | rows/sec | Time for 1M rows (single CPU) |
 |---|---:|---|
-| `sentiment` (RoBERTa) | 22.7 | ~12 hours |
+| `sentiment` (RoBERTa) | 22.2 | ~12.5 hours |
 | `category` (BART-MNLI zero-shot) | **1.5** | **~7.7 days** |
-| `emotion` (GoEmotions) | 36.1 | ~7.7 hours |
+| `emotion` (GoEmotions) | 24.2 | ~11.5 hours |
 
 **Category is the bottleneck** on a single machine. **This is why the medaillon split matters for the HF backend**: persisting Silver and re-scoring Gold from it is the only way the HF backend is operationally viable. A k-anonymity threshold change takes milliseconds; a full Silver re-run takes days.
 
-For production, run HF on a Spark cluster via `analyze_spark()`. The `pandas_udf(SCALAR_ITER)` runtime parallelises per-row inference across executors.
+Numbers are produced by `benchmarks/bench_hf.py` (one subprocess per layer, warmup + measure pattern, child prints a parseable `MEASURE` line the parent parses). See [`RESULTS_hf.md`](./RESULTS_hf.md) for the full HF report.
 
-See [`RESULTS_hf.md`](./RESULTS_hf.md) for the full HF report including production recommendations.
+For production, run HF on a Spark cluster via `analyze_spark()`. The `pandas_udf(SCALAR_ITER)` runtime parallelises per-row inference across executors.
 
 ## Lexicon backend — per-layer throughput (rows/sec)
 

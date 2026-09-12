@@ -1,27 +1,25 @@
 """Per-layer HF runner. Used by `bench_hf.py` to measure one layer at
-a time so cold-load and warmup costs are isolated.
+a time. Prints a single `MEASURE <layer> <rows> <elapsed_sec>` line
+to stdout so the parent process can parse the timing without
+subprocess / interpreter overhead.
 
 Usage:
-    python benchmarks/_hf_one_layer.py --rows 100 --layer sentiment --warmup
-    python benchmarks/_hf_one_layer.py --rows 100 --layer sentiment --measure
+    python benchmarks/_hf_one_layer.py --rows 100 --layer sentiment --mode warmup
+    python benchmarks/_hf_one_layer.py --rows 100 --layer sentiment --mode measure
 """
 from __future__ import annotations
 import argparse
 import os
-import sys
+import signal
 import time
 
-# Force HF backend (lexicon is for tests only).
-os.environ["EMPLOYEE_VOICE_ALLOW_FALLBACK"] = "1"  # themes exempt
 
-# These imports happen after the env var is set so analyzers._detect_backends
-# sees the right flag.
-import employee_voice  # noqa: E402
-import employee_voice.config as _cfg  # noqa: E402
-_cfg.ALLOW_FALLBACK = True  # themes uses fallback
-from employee_voice.analyzers import (  # noqa: E402
-    analyze_sentiment, analyze_category, analyze_emotion,
-)
+# A watchdog for the child. If the parent process loses its
+# connection to us (e.g. SIGKILL on parent) we'd otherwise hang
+# forever on a slow HF forward pass. The signal handler turns
+# the alarm into a clean exit.
+def _alarm_handler(signum, frame):
+    raise SystemExit(124)  # same convention as GNU `timeout`
 
 
 def main():
@@ -29,19 +27,25 @@ def main():
     ap.add_argument("--rows", type=int, required=True)
     ap.add_argument("--layer", choices=["sentiment", "category", "emotion"],
                     required=True)
-    ap.add_argument("--warmup", action="store_true",
-                    help="Run a throwaway pass; the result is discarded.")
-    ap.add_argument("--measure", action="store_true",
-                    help="Run the actual measurement; print timing to stdout.")
+    ap.add_argument("--mode", choices=["warmup", "measure"], required=True)
+    ap.add_argument("--timeout-s", type=int, default=1500,
+                    help="Child watchdog: SIGALRM after this many seconds.")
     args = ap.parse_args()
 
-    if not (args.warmup or args.measure):
-        ap.error("specify --warmup or --measure")
+    signal.signal(signal.SIGALRM, _alarm_handler)
+    signal.alarm(args.timeout_s)
 
-    # Force HF for the chosen layer. We do this AFTER the analyzer
-    # module has been imported (it captures ALLOW_FALLBACK at call
-    # time, not at import time, so this is safe).
-    from employee_voice.analyzers import _Backends
+    # Force HF for the chosen layer. The analyzer's _current_backend
+    # is read at call time, so toggling ALLOW_FALLBACK + overriding
+    # the per-layer _BACKENDS cache is enough.
+    os.environ["EMPLOYEE_VOICE_ALLOW_FALLBACK"] = "1"  # themes exempt
+
+    import employee_voice  # noqa: E402
+    import employee_voice.config as _cfg  # noqa: E402
+    _cfg.ALLOW_FALLBACK = True
+    from employee_voice.analyzers import (  # noqa: E402
+        analyze_sentiment, analyze_category, analyze_emotion, _Backends,
+    )
     import employee_voice.analyzers as _a
     _a._BACKENDS = _Backends(
         sentiment="transformers",
@@ -61,8 +65,9 @@ def main():
         analyze_emotion(texts)
     elapsed = time.perf_counter() - t0
 
-    if args.measure:
-        # Print a single number the parent process can parse.
+    if args.mode == "measure":
+        # Single parseable line. The parent reads stdout and pulls
+        # this out; the rest of stdout is for human debugging.
         print(f"MEASURE {args.layer} {args.rows} {elapsed:.4f}")
 
 

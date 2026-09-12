@@ -280,9 +280,9 @@ harness even asserts this as an invariant.
 
 | Layer | rows/sec | Time for 1M rows (single CPU) |
 |---|---:|---|
-| `sentiment` (RoBERTa) | 22.7 | ~12 hours |
+| `sentiment` (RoBERTa) | 22.2 | ~12.5 hours |
 | `category` (BART-MNLI zero-shot) | **1.5** | **~7.7 days** |
-| `emotion` (GoEmotions) | 36.1 | ~7.7 hours |
+| `emotion` (GoEmotions) | 24.2 | ~11.5 hours |
 
 **Category is the bottleneck** on a single machine. This is why the
 **medaillon split matters for the HF backend**: persisting Silver
@@ -301,6 +301,10 @@ python benchmarks/bench.py --rows 1000,10000,50000 --backend lexicon \
 pip install 'employee-voice-analytics[ml]'
 python benchmarks/bench_hf.py --rows 100
 ```
+
+Both harnesses use Python's `subprocess.run` with their own timeout
+(no external `timeout` binary needed; works identically on macOS and
+Linux).
 
 ## Adapting to your company
 

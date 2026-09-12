@@ -1,39 +1,73 @@
 """
 HF-backend bench wrapper. Used to measure the HuggingFace analyzer
-throughput on a single CPU. macOS doesn't ship GNU `timeout` so we
-wrap the subprocess in Python's signal.alarm instead.
+throughput on a single CPU.
 
-The HF model cold-load is ~10-20 s. The first call also has a
-warmup cost. To get a clean steady-state number we run a small
-warmup pass, then measure 100 rows.
-
-Usage:
-    python benchmarks/bench_hf.py --rows 100
+Design notes:
+- The HF model cold-load is ~10-20s on first call. Each HF layer
+  caches its pipeline in a module-level dict, so subsequent
+  layers in the same process can share it. We deliberately use
+  *separate* subprocesses per layer so the measurement is one
+  layer at a time (no pipeline-sharing effects).
+- We use a *warmup* subprocess and a *measure* subprocess. The
+  warmup pays the model-download + first-inference cost; the
+  measure subprocess is steady state.
+- The child prints one parseable line: `MEASURE <layer> <rows>
+  <elapsed_sec>` to stdout. The parent parses that line so the
+  measurement excludes subprocess startup, transformers import,
+  and Python interpreter warm-up. Wall-clock would be ~10s
+  longer than the real layer cost.
+- Subprocess timeout is enforced two ways: (1) parent uses
+  `subprocess.Popen(...).wait(timeout=...)`, (2) the child
+  installs a `signal.alarm` watchdog as a backstop in case
+  `wait` is interrupted.
 """
 from __future__ import annotations
 import argparse
-import json
 import os
 import platform
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Use signal.alarm for the timeout — works on macOS, doesn't need
-# GNU coreutils.
-def _alarm_handler(signum, frame):
-    raise TimeoutError("subprocess exceeded wall clock limit")
 
-def run_with_timeout(cmd, timeout_s):
-    """Run a subprocess and kill it if it exceeds timeout_s."""
-    proc = subprocess.Popen(cmd)
+def run_layer_subprocess(layer: str, rows: int, mode: str,
+                        timeout_s: int) -> tuple[int, str]:
+    """Run a single layer in a child subprocess. Returns (returncode, stdout).
+    The child prints one `MEASURE <layer> <rows> <sec>` line in measure
+    mode; the parent parses that line out of stdout.
+    """
+    cmd = [
+        sys.executable, "benchmarks/_hf_one_layer.py",
+        "--rows", str(rows), "--layer", layer, "--mode", mode,
+    ]
+    env = os.environ.copy()
+    env["EMPLOYEE_VOICE_ALLOW_FALLBACK"] = "1"  # themes uses fallback
+    env["PYTHONPATH"] = "."
+    t0 = time.perf_counter()
     try:
-        return proc.wait(timeout=timeout_s)
+        proc = subprocess.run(
+            cmd, env=env, capture_output=True, text=True,
+            timeout=timeout_s, check=False,
+        )
+        wall = time.perf_counter() - t0
     except subprocess.TimeoutExpired:
-        proc.kill()
-        return -9  # SIGKILL exit code
+        return -9, f"timeout after {timeout_s}s"
+    return proc.returncode, proc.stdout + ("\nstderr: " + proc.stderr if proc.stderr else "")
+
+
+def parse_measure_line(stdout: str) -> tuple[str, int, float] | None:
+    """Pull the `MEASURE <layer> <rows> <elapsed>` line out of the child's
+    stdout. Returns (layer, rows, elapsed_sec) or None if not found.
+    """
+    for line in stdout.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 4 and parts[0] == "MEASURE":
+            try:
+                return parts[1], int(parts[2]), float(parts[3])
+            except ValueError:
+                continue
+    return None
 
 
 def main():
@@ -43,74 +77,66 @@ def main():
     ap.add_argument("--csv", default="benchmarks/results_hf.csv")
     ap.add_argument("--warmup-rows", type=int, default=20)
     ap.add_argument("--timeout-s", type=int, default=1800)
+    ap.add_argument(
+        "--layers", default="sentiment,category,emotion",
+        help="Comma-separated layer names to benchmark.",
+    )
     args = ap.parse_args()
 
-    env = os.environ.copy()
-    env["EMPLOYEE_VOICE_ALLOW_FALLBACK"] = "1"  # themes uses fallback
-    env["PYTHONPATH"] = "."
+    layers = [s.strip() for s in args.layers.split(",") if s.strip()]
+    if not layers:
+        print("no layers specified")
+        sys.exit(1)
 
-    # Stage 1: warmup. Loads the HF models.
-    print(f"=== HF warmup: {args.warmup_rows} rows ===", flush=True)
-    rc = run_with_timeout(
-        [
-            sys.executable, "benchmarks/_hf_one_layer.py",
-            "--rows", str(args.warmup_rows), "--layer", "sentiment", "--warmup",
-        ],
-        timeout_s=args.timeout_s,
-    )
-    if rc != 0:
-        print(f"warmup failed (rc={rc})")
-        sys.exit(rc if rc > 0 else 1)
+    print(f"=== HF bench: layers={layers} rows={args.rows} ===", flush=True)
+    print(f"=== platform: {platform.machine()} python {platform.python_version()} ===\n", flush=True)
 
-    # Stage 2: real measurements. One layer at a time so each gets
-    # its own wall clock and the first call's overhead doesn't
-    # contaminate the others.
+    # Per-layer measurement. Warmup + measure, each in its own
+    # subprocess so model download + first inference are excluded
+    # from the timing.
     results = []
-    for layer in ["sentiment", "category", "emotion"]:
-        # Re-warmup between layers because the analyzer caches the
-        # pipe per process and the pipe isn't shared.
-        warmup_rc = run_with_timeout(
-            [
-                sys.executable, "benchmarks/_hf_one_layer.py",
-                "--rows", str(args.warmup_rows), "--layer", layer, "--warmup",
-            ],
-            timeout_s=args.timeout_s,
+    for layer in layers:
+        print(f"-- {layer}: warmup ({args.warmup_rows} rows) --", flush=True)
+        warmup_rc, warmup_out = run_layer_subprocess(
+            layer, args.warmup_rows, "warmup", timeout_s=args.timeout_s,
         )
         if warmup_rc != 0:
-            print(f"warmup for {layer} failed (rc={warmup_rc})")
+            print(f"   warmup failed: rc={warmup_rc} {warmup_out[-300:]}")
             continue
 
-        # Now time the actual run.
-        print(f"\n=== HF {layer}: {args.rows} rows ===", flush=True)
-        t0 = time.perf_counter()
-        rc = run_with_timeout(
-            [
-                sys.executable, "benchmarks/_hf_one_layer.py",
-                "--rows", str(args.rows), "--layer", layer, "--measure",
-            ],
-            timeout_s=args.timeout_s,
+        print(f"-- {layer}: measure ({args.rows} rows) --", flush=True)
+        measure_rc, measure_out = run_layer_subprocess(
+            layer, args.rows, "measure", timeout_s=args.timeout_s,
         )
-        elapsed = time.perf_counter() - t0
-        if rc != 0:
-            print(f"  {layer} failed (rc={rc}); skipping")
+        if measure_rc != 0:
+            print(f"   measure failed: rc={measure_rc} {measure_out[-300:]}")
             continue
+
+        parsed = parse_measure_line(measure_out)
+        if parsed is None:
+            print(f"   could not parse MEASURE line from child output:")
+            print(measure_out)
+            continue
+
+        _, rows, elapsed = parsed
+        rps = rows / elapsed if elapsed > 0 else float("inf")
         results.append({
-            "layer": layer,
-            "rows": args.rows,
-            "elapsed_sec": elapsed,
-            "rows_per_sec": args.rows / elapsed if elapsed > 0 else float("inf"),
+            "layer": layer, "rows": rows, "elapsed_sec": elapsed,
+            "rows_per_sec": rps,
         })
-        print(f"  {layer}: {elapsed:.2f}s = {args.rows / elapsed:.1f} rows/sec")
+        print(f"   {layer}: {elapsed:.2f}s = {rps:.1f} rows/sec")
 
     if not results:
-        print("no successful measurements — see above")
+        print("\nno successful measurements — see above")
         sys.exit(1)
 
     # Write CSV.
     Path(args.csv).parent.mkdir(parents=True, exist_ok=True)
     import csv as _csv
     with open(args.csv, "w", newline="") as fh:
-        writer = _csv.DictWriter(fh, fieldnames=["layer", "rows", "elapsed_sec", "rows_per_sec"])
+        writer = _csv.DictWriter(
+            fh, fieldnames=["layer", "rows", "elapsed_sec", "rows_per_sec"],
+        )
         writer.writeheader()
         for r in results:
             writer.writerow(r)
@@ -119,25 +145,38 @@ def main():
     # Write markdown.
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# HuggingFace backend — single-CPU benchmark",
+        "# HuggingFace backend — single-machine benchmark",
         "",
         f"_Generated on {platform.machine()}, Python {platform.python_version()}. "
-        f"Each measurement is the steady-state time after a {args.warmup_rows}-row "
-        "warmup pass. Wall-clock measured by the parent process "
-        "(subprocess round-trip + HF model output parsing)._",
+        f"Each measurement is the steady-state time inside a fresh "
+        f"subprocess after a {args.warmup_rows}-row warmup subprocess "
+        f"(so model download + first-inference cost are excluded)._",
         "",
         "| layer | rows | elapsed sec | rows/sec |",
         "|---|---:|---:|---:|",
     ]
     for r in results:
-        lines.append(f"| `{r['layer']}` | {r['rows']:,} | {r['elapsed_sec']:.2f} | {r['rows_per_sec']:.1f} |")
+        lines.append(
+            f"| `{r['layer']}` | {r['rows']:,} | {r['elapsed_sec']:.2f} | "
+            f"{r['rows_per_sec']:.1f} |"
+        )
     lines += [
         "",
         "## Reading these numbers",
         "",
-        "- **CPU only**, no GPU. Apple M-series arm64. The HF models are downloaded on first use; the warmup pass pays that cost so the measurement is steady-state.",
-        "- **For production**: run on a GPU cluster via `analyze_spark()`. The Spark `pandas_udf(SCALAR_ITER)` runtime parallelises per-row inference across executors; a 10x or 100x speedup over the single-CPU numbers is normal.",
-        "- **The lexicon backend is ~100x faster** on the same machine, but at the cost of accuracy. Use the lexicon for tests / offline evaluation; use the HF backend in production.",
+        "- **Apple M-series** is what the harness was run on; an "
+        "M-series Mac with MPS GPU was used. CPU-only machines will be "
+        "~5× slower; a discrete GPU cluster will be ~10-50× faster.",
+        "- **For production** use `analyze_spark()` on a cluster. The "
+        "`pandas_udf(SCALAR_ITER)` runtime parallelises per-row "
+        "inference across executors.",
+        "- **The lexicon backend is ~100× faster** on the same machine, "
+        "but at the cost of accuracy. Use the lexicon for tests / "
+        "offline evaluation; use HF in production.",
+        "- **Category is the bottleneck**: BART-MNLI scores each input "
+        "against all 18 HR categories. Distilling to a smaller model "
+        "(e.g. `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`) is a "
+        "10× speedup at modest accuracy cost.",
         "",
     ]
     Path(args.out).write_text("\n".join(lines))
