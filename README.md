@@ -262,22 +262,44 @@ pytest -m bench              # smoke benchmark; opt-in for CI
 ## Performance
 
 See [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) for the full
-report. Headline numbers (lexicon backend, single CPU, M-series arm64):
+report. Headline numbers:
 
-| Rows | `analyze_feedback` | `score_gold_from_silver` | Speedup |
+### Medaillon speedup (lexicon backend, single CPU)
+
+| Rows | `analyze_feedback` (full) | `score_gold_from_silver` (Gold only) | **Speedup** |
 |---:|---:|---:|---:|
-| 1,000 | 6.5 s | 0.10 s | **66×** |
-| 10,000 | 10.2 s | 0.88 s | **11.6×** |
-| 50,000 | 17.3 s | 4.0 s | **4.3×** |
+| 1,000 | 6.52 s | 0.10 s | **66×** |
+| 10,000 | 10.18 s | 0.88 s | **11.6×** |
+| 50,000 | 17.30 s | 4.02 s | **4.3×** |
 
 Re-scoring Gold from a persisted Silver table (after risk-weight or
-k-anonymity changes) is the right operational pattern. Themes is
-the only Silver layer that should be re-run when the corpus shifts
-meaningfully.
+k-anonymity changes) is the right operational pattern. The benchmark
+harness even asserts this as an invariant.
+
+### HF backend (Apple M-series MPS, 100 rows, steady state)
+
+| Layer | rows/sec | Time for 1M rows (single CPU) |
+|---|---:|---|
+| `sentiment` (RoBERTa) | 22.7 | ~12 hours |
+| `category` (BART-MNLI zero-shot) | **1.5** | **~7.7 days** |
+| `emotion` (GoEmotions) | 36.1 | ~7.7 hours |
+
+**Category is the bottleneck** on a single machine. This is why the
+**medaillon split matters for the HF backend**: persisting Silver
+and re-scoring Gold from it is the only way the HF backend is
+operationally viable. A k-anonymity threshold change takes
+milliseconds; a full Silver re-run takes days. For production, run
+HF on a Spark cluster via `analyze_spark()` — the `pandas_udf(SCALAR_ITER)`
+runtime parallelises per-row inference across executors.
 
 ```bash
+# Lexicon (fast, no model downloads)
 python benchmarks/bench.py --rows 1000,10000,50000 --backend lexicon \
     --out benchmarks/RESULTS_lexicon.md --csv benchmarks/results_lexicon.csv
+
+# HuggingFace (slower on CPU, downloads models on first use)
+pip install 'employee-voice-analytics[ml]'
+python benchmarks/bench_hf.py --rows 100
 ```
 
 ## Adapting to your company
