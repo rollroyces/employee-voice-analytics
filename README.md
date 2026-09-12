@@ -256,6 +256,28 @@ Parquet files under `dbfs:/FileStore/employee_voice/output/` otherwise.
 pip install 'employee-voice-analytics[dev]'
 pytest                       # unit + integration (~17 s, no Java needed)
 pytest -m databricks         # also runs the notebook locally (needs Java + PySpark + delta-spark)
+pytest -m bench              # smoke benchmark; opt-in for CI
+```
+
+## Performance
+
+See [`benchmarks/RESULTS.md`](./benchmarks/RESULTS.md) for the full
+report. Headline numbers (lexicon backend, single CPU, M-series arm64):
+
+| Rows | `analyze_feedback` | `score_gold_from_silver` | Speedup |
+|---:|---:|---:|---:|
+| 1,000 | 6.5 s | 0.10 s | **66×** |
+| 10,000 | 10.2 s | 0.88 s | **11.6×** |
+| 50,000 | 17.3 s | 4.0 s | **4.3×** |
+
+Re-scoring Gold from a persisted Silver table (after risk-weight or
+k-anonymity changes) is the right operational pattern. Themes is
+the only Silver layer that should be re-run when the corpus shifts
+meaningfully.
+
+```bash
+python benchmarks/bench.py --rows 1000,10000,50000 --backend lexicon \
+    --out benchmarks/RESULTS_lexicon.md --csv benchmarks/results_lexicon.csv
 ```
 
 ## Adapting to your company

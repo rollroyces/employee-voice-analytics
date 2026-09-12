@@ -106,8 +106,9 @@ include = ["employee_voice*"]
 minversion = "7.0"
 # Default to skipping the Databricks notebook test (it needs Java +
 # PySpark + delta-spark). Run it explicitly with `pytest -m databricks`.
-addopts = "-ra -q -m 'not databricks'"
+addopts = "-ra -q -m 'not databricks and not bench'"
 testpaths = ["tests"]
 markers = [
     "databricks: tests that require Java + PySpark (run explicitly with `pytest -m databricks`)",
+    "bench: smoke benchmark; slow on CI, run with `pytest -m bench`",
 ]

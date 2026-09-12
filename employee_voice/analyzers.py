@@ -222,6 +222,12 @@ def analyze_sentiment(texts: List[str]) -> pd.DataFrame:
     out = pipe(texts, truncation=True, max_length=512)
     rows = []
     for r in out:
+        # The HF pipeline's output shape depends on `top_k`. With the
+        # default (top_k=1) it's a single dict; with top_k=None it's
+        # a list of dicts. Normalise both to a list of (label, score)
+        # tuples so the rest of the function doesn't have to care.
+        if isinstance(r, list):
+            r = r[0] if r else {"label": "neutral", "score": 0.0}
         label = r["label"].lower()
         if "pos" in label:
             label = "positive"

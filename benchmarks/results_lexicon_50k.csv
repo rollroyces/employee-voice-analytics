@@ -1,0 +1,5 @@
+label,rows,backend,seconds,peak_mem_mb,extras
+preprocess,50000,lexicon,0.6790189580060542,11.397472381591797,{}
+pii_scrub_regex,50000,lexicon,3.155490957899019,16.089327812194824,{}
+analyze_feedback,50000,lexicon,17.300345874857157,249.72683143615723,{}
+score_gold_from_silver,50000,lexicon,4.02160929213278,46.30602550506592,{}
