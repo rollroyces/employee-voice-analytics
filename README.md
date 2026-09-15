@@ -22,53 +22,57 @@ Dual-licensed: AGPL-3.0-or-later + commercial — see
 
 ## Architecture
 
-```
-                              ┌──────────────────────────────────────────────┐
-                              │          Input (any of these)               │
-                              │   CSV / XLSX / JSON / Parquet / Delta       │
-                              └────────────────────┬─────────────────────────┘
-                                                   │
-                  ┌────────────────────────────────┼─────────────────────────────┐
-                  │                                │                             │
-                  ▼                                ▼                             ▼
-        ┌──────────────────┐              ┌──────────────────┐        ┌──────────────────┐
-        │  Local CLI       │              │  Databricks       │        │  Synthetic data  │
-        │  python -m       │              │  Notebooks         │        │  generator       │
-        │  employee_voice  │              │  databricks_       │        │  eva generate-   │
-        │  eva analyze     │              │  notebook.py       │        │  sample          │
-        └────────┬─────────┘              └────────┬──────────┘        └──────────────────┘
-                 │                                 │
-                 │            Privacy layer (Layer 0.5)                  │
-                 │  PIIScrubber: regex or Presidio+spaCy                │
-                 │  k-anonymity threshold (default 5)                    │
-                 └─────────────────────────────────┬─────────────────────┘
-                                                   │
-        ┌──────────────────────────────────────────┴───────────────────────────────┐
-        │                  Medaillon (Bronze / Silver / Gold)                  │
-        │                                                                        │
-        │  ┌────────────┐   ┌────────────────┐   ┌────────────────────────┐    │
-        │  │  Bronze    │ → │    Silver      │ → │        Gold            │    │
-        │  │ ingest_    │   │  transform_     │   │     score_gold          │    │
-        │  │  bronze()  │   │   silver()      │   │                         │    │
-        │  │            │   │                 │   │  + RiskScore, RiskBand │    │
-        │  │ raw +      │   │  Layers 0-4:    │   │  + PushFactors,        │    │
-        │  │ normalised │   │  preprocess +   │   │    PullFactors         │    │
-        │  │ columns    │   │  sentiment +    │   │  + RiskVelocity        │    │
-        │  │            │   │  category +     │   │  + k-anonymity         │    │
-        │  │            │   │  emotion +      │   │  + optional LLM        │    │
-        │  │            │   │  themes         │   │    summary              │    │
-        │  │ Persist as │   │  Persist as     │   │  Persist as             │    │
-        │  │   bronze   │   │   silver        │   │   gold                  │    │
-        │  │   Delta    │   │   Delta         │   │   Delta                 │    │
-        │  └────────────┘   └────────────────┘   └────────────────────────┘    │
-        │       ↑                                       ↑                       │
-        │       └───── re-score without re-running sentiment ─────┘            │
-        └──────────────────────────────────────────────────────────────────────┘
-                                                   │
-                                                   ▼
-                                ┌──────────────────────────────┐
-                                │  Power BI / Tableau / ML     │
-                                └──────────────────────────────┘
+```mermaid
+flowchart TB
+    Input[/"Input: CSV / XLSX / JSON / Parquet / Delta"/]
+
+    subgraph entrypoints["Three entry points"]
+        CLI["Local CLI<br/><b>eva analyze</b>"]
+        DB["Databricks notebook<br/><b>databricks_notebook.py</b>"]
+        SYN["Synthetic generator<br/><b>eva generate-sample</b>"]
+    end
+
+    Input --> entrypoints
+
+    subgraph medallion["Medaillon: Bronze → Silver → Gold"]
+        direction LR
+
+        Bronze["Bronze<br/><i>ingest_bronze()</i><br/>raw + normalised cols<br/>persist as Delta"]
+
+        subgraph silver["Silver (Layers 0-4 + privacy)"]
+            direction TB
+            L0["Layer 0 preprocess<br/><i>CleanComment</i>"]
+            L05["Layer 0.5 privacy<br/><i>optional PII redaction</i>"]
+            subgraph ml["HF models (or fallback engines)"]
+                L1["Layer 1 sentiment"]
+                L2["Layer 2 category"]
+                L3["Layer 3 emotion"]
+                L4["Layer 4 themes"]
+            end
+            L0 --> L05 --> L1 --> L2 --> L3 --> L4
+        end
+
+        subgraph gold["Gold (Layers 5a, 5b + k-anonymity)"]
+            direction TB
+            L5a["Layer 5a risk_score<br/>+ PushFactors / PullFactors"]
+            L5b["Layer 5b risk_velocity<br/>+ k-anonymity suppression"]
+            L5a --> L5b
+        end
+
+        Bronze --> silver
+        silver --> gold
+    end
+
+    entrypoints --> medallion
+
+    L6["Layer 6 LLM summary<br/><i>side-effect:</i> writes summary_*.md"]:::side
+    silver -.-> L6
+
+    Out[/"Power BI / Tableau / ML"/]
+    gold --> Out
+    L6 --> Out
+
+    classDef side stroke-dasharray: 4 3,opacity:0.7
 ```
 
 ## Install
@@ -171,31 +175,79 @@ available for backward compatibility.
 
 ## Layer enforcement (Layers 0-6)
 
-| # | Layer | Required columns | Runtime deps |
-|---|---|---|---|
-| 0 | preprocess | `Comment`, `CleanComment` | (none) |
-| 0.5 | privacy | `CleanComment` (redacted) | regex: none; presidio: `[privacy]` extra |
-| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` (or fallback) |
-| 2 | category | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` (or fallback) |
-| 3 | emotion | `Emotion`, `EmotionScore` | `transformers`, `torch` (or fallback) |
-| 4 | themes | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` (or TF-IDF + KMeans) |
-| 5 | risk_score | `RiskScore`, `RiskBand`, `PushFactors`, `PullFactors` | (none) |
-| 5b | risk_velocity | `RiskVelocity` | (none; null if `EmployeeID`/`SurveyDate` missing) |
-| 6 | llm_summary | (writes side files) | `openai` |
+The pipeline runs in fixed order, each layer pinned to a schema contract:
 
-If a layer's dependency is missing, the pipeline raises
-`LayerDependencyError` with the matching `pip install` command. To use
-the lightweight keyword / TF-IDF fallback engines instead (useful for
-CI, dev, or pre-building the BI model before the GPU libraries are
-approved), opt in explicitly:
+| # | Layer | Required output | Runtime deps | Cost tier |
+|---|---|---|---|---|
+| 0 | preprocess | `CleanComment` | (stdlib) | trivial |
+| 0.5 | privacy (PII redaction) | `CleanComment` (redacted) | regex: none; presidio: `[privacy]` extra + spaCy model | cheap |
+| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` (or fallback) | **ML** |
+| 2 | category | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` (or fallback) | **ML** |
+| 3 | emotion | `Emotion`, `EmotionScore` | `transformers`, `torch` (or fallback) | **ML** |
+| 4 | themes | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` (or TF-IDF + KMeans) | **ML** |
+| 5a | risk_score | `RiskScore`, `RiskBand`, `PushFactors`, `PullFactors` | (none; uses layer 1-3 outputs) | trivial |
+| 5b | risk_velocity | `RiskVelocity` | (none; null when `EmployeeID`/`SurveyDate` missing) | trivial |
+| 6 | llm_summary | (writes side files) | `openai` (optional) | external |
+
+**Cost tier matters** because the medaillon split is built around it:
+
+```mermaid
+flowchart LR
+    Bronze["Bronze<br/><i>ingest + normalise</i>"]
+    subgraph silver["Silver (expensive)"]
+        L0["L0 preprocess"]:::trivial
+        L05["L0.5 privacy<br/><i>optional</i>"]:::trivial
+        L1["L1 sentiment"]:::ml
+        L2["L2 category"]:::ml
+        L3["L3 emotion"]:::ml
+        L4["L4 themes"]:::ml
+        L0 --> L05 --> L1 --> L2 --> L3 --> L4
+    end
+    subgraph gold["Gold (cheap, re-runnable)"]
+        L5a["L5a risk_score"]:::trivial
+        L5b["L5b risk_velocity"]:::trivial
+        L5a --> L5b
+    end
+    Bronze --> silver
+    silver --> gold
+
+    classDef trivial fill:#e8f5e9,stroke:#1b5e20
+    classDef ml fill:#fff3e0,stroke:#e65100
+```
+
+- **Bronze** is just ingest and column normalisation.
+- **Silver** is where the ML layers run (sentiment, category, emotion, themes) plus preprocess and (optionally) PII redaction. This is the expensive stage. Persist it.
+- **Gold** is just layers 5a/5b (risk score, push/pull factors, q-over-q velocity) plus k-anonymity suppression. It runs on the Silver output, doesn't touch the ML stack, and is the layer you re-run when you want to adjust risk weights, push/pull dictionaries, or k-anonymity thresholds.
+- **Layer 6 (LLM summary)** is a side-effect — it doesn't add columns to the fact table, it writes a separate summary file.
+
+The measured payoff of separating Silver and Gold is documented in `benchmarks/RESULTS.md` — re-scoring Gold from the same Silver is **66× faster at 1k rows, 11.5× at 10k, 4.3× at 50k** than re-running the whole pipeline.
+
+### Two failure modes
+
+`run_all_layers()` enforces the contract with two distinct error types:
+
+1. **`LayerDependencyError`** — thrown at the start of a layer when its runtime dep (HF model, BERTopic, OpenAI client, spaCy model) is missing **and** `EMPLOYEE_VOICE_ALLOW_FALLBACK` is not set. The error message includes the exact `pip install` command needed. This is the **default** behaviour. The production path will not silently downgrade.
+
+2. **`LayerContractError`** — thrown at the end of `run_all_layers()` when a layer's runner failed to populate its required column, or when the column is entirely null on non-empty input. This catches bugs in the layer itself (e.g. a HF pipeline returning a different shape than the contract assumes). **Not affected by the fallback flag** — a contract violation is always a bug.
+
+### Strict-by-default, opt-in fallback
+
+The fallback flag controls only the dependency check. By default the pipeline **fails fast** on missing deps. To use the lightweight keyword / TF-IDF fallback engines (CI, dev, or pre-building the BI model before the GPU libraries are approved), opt in explicitly:
 
 ```bash
 export EMPLOYEE_VOICE_ALLOW_FALLBACK=1
 eva analyze --input data/sample_feedback.csv --outdir output
 ```
 
-If a layer's runner fails to populate a required column, the pipeline
-raises `LayerContractError` instead of silently emitting nulls.
+Or in Python:
+
+```python
+import employee_voice
+employee_voice.set_allow_fallback(True)
+df = employee_voice.analyze_feedback(df)
+```
+
+The fallback does **not** silently change column shapes — the contract columns are identical between fallback and HF engines, so a downstream Power BI / ML model does not need to know which path ran.
 
 ## Privacy guardrails
 
