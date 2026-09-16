@@ -30,6 +30,19 @@ Public Python API — the recommended way to use this from code:
     aspects  = extract_aspects(["Great manager, awful salary", ...])
     factors  = detect_push_factors(comment)
 
+    # Use a hosted LLM (Azure OpenAI / OpenAI / Anthropic) instead of the
+    # local HF / fallback engines for sentiment, category, and/or emotion.
+    # Requires AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY (or OPENAI_API_KEY
+    # or ANTHROPIC_API_KEY) in the environment. PII is auto-scrubbed by
+    # default.
+    fact = analyze_feedback(
+        my_df,
+        sentiment_backend="llm",
+        category_backend="llm",
+        emotion_backend="llm",
+        llm_options={"batch_size": 100, "max_concurrent": 2},
+    )
+
     # Synthetic data for tests / demos
     df = generate_synthetic(n=250, seed=42)
 """

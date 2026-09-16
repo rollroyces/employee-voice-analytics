@@ -130,12 +130,25 @@ def run_preprocess(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series
     return df, is_non_answer, is_short
 
 
-def run_sentiment(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    """Layer 1."""
+def run_sentiment(df: pd.DataFrame, mask: pd.Series, *,
+                  backend: str = "auto", llm_options: Optional[dict] = None) -> pd.DataFrame:
+    """Layer 1.
+
+    Args:
+      backend: "auto" (use HF/fallback; respects ALLOW_FALLBACK),
+        "hf", "fallback", or "llm".
+      llm_options: dict of kwargs passed to analyze_*_llm
+        (batch_size, max_concurrent, send_raw_text, model,
+        prompt_version). Ignored if backend != "llm".
+    """
     if mask.any():
         idx = df.index[mask]
         texts = df.loc[idx, "CleanComment"].tolist()
-        sent = analyze_sentiment(texts)
+        if backend == "llm":
+            from .analyzers import analyze_sentiment_llm
+            sent = analyze_sentiment_llm(texts, **(llm_options or {}))
+        else:
+            sent = analyze_sentiment(texts)
         sent.index = idx
         df = pd.concat([df, sent], axis=1)
     else:
@@ -148,12 +161,17 @@ def run_sentiment(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
     return df
 
 
-def run_category(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    """Layer 2."""
+def run_category(df: pd.DataFrame, mask: pd.Series, *,
+                 backend: str = "auto", llm_options: Optional[dict] = None) -> pd.DataFrame:
+    """Layer 2. See run_sentiment for backend semantics."""
     if mask.any():
         idx = df.index[mask]
         texts = df.loc[idx, "CleanComment"].tolist()
-        cat = analyze_category(texts)
+        if backend == "llm":
+            from .analyzers import analyze_category_llm
+            cat = analyze_category_llm(texts, **(llm_options or {}))
+        else:
+            cat = analyze_category(texts)
         cat.index = idx
         df = pd.concat([df, cat], axis=1)
     else:
@@ -171,12 +189,17 @@ def run_category(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
     return df
 
 
-def run_emotion(df: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
-    """Layer 3."""
+def run_emotion(df: pd.DataFrame, mask: pd.Series, *,
+                backend: str = "auto", llm_options: Optional[dict] = None) -> pd.DataFrame:
+    """Layer 3. See run_sentiment for backend semantics."""
     if mask.any():
         idx = df.index[mask]
         texts = df.loc[idx, "CleanComment"].tolist()
-        emo = analyze_emotion(texts)
+        if backend == "llm":
+            from .analyzers import analyze_emotion_llm
+            emo = analyze_emotion_llm(texts, **(llm_options or {}))
+        else:
+            emo = analyze_emotion(texts)
         emo.index = idx
         df = pd.concat([df, emo], axis=1)
     else:
@@ -252,17 +275,30 @@ def run_all_layers(
     outdir: Optional[str] = None,
     run_topics: bool = True,
     run_summary_layer: bool = False,
+    *,
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> dict:
     """Run Layers 0-5 in order, optionally Layer 4 and Layer 6.
 
     Returns a dict with the augmented DataFrame and per-layer metadata so
     the pipeline can write the topic dimension and exec summary.
 
+    Per-layer backend choice:
+      - sentiment_backend / category_backend / emotion_backend:
+        "auto" (use HF/fallback; respects ALLOW_FALLBACK), "hf",
+        "fallback", or "llm".
+      - llm_options: dict of kwargs forwarded to analyze_*_llm when the
+        corresponding backend is "llm". Common keys: batch_size,
+        max_concurrent, send_raw_text, model, prompt_version.
+
     Raises:
-        LayerDependencyError — a layer's deps are missing and ALLOW_FALLBACK
-            is False.
-        LayerContractError — at least one layer's required output columns
-            are missing or entirely null after the run.
+      LayerDependencyError — a layer's deps are missing and ALLOW_FALLBACK
+          is False.
+      LayerContractError — at least one layer's required output columns
+          are missing or entirely null after the run.
     """
     by_layer = {c.layer: c for c in cfg.LAYER_CONTRACTS}
 
@@ -279,17 +315,17 @@ def run_all_layers(
     analyzable_mask = (~is_non_answer) & (~is_short)
 
     # 3. Layer 1 — sentiment (must come before risk: score_risk reads sentiment)
-    df = run_sentiment(df, analyzable_mask)
+    df = run_sentiment(df, analyzable_mask, backend=sentiment_backend, llm_options=llm_options)
     if "Sentiment" not in df.columns:
         raise LayerOrderError("Layer 1 failed to populate 'Sentiment' column")
 
     # 4. Layer 2 — category
-    df = run_category(df, analyzable_mask)
+    df = run_category(df, analyzable_mask, backend=category_backend, llm_options=llm_options)
     if "Category1" not in df.columns:
         raise LayerOrderError("Layer 2 failed to populate 'Category1' column")
 
     # 5. Layer 3 — emotion
-    df = run_emotion(df, analyzable_mask)
+    df = run_emotion(df, analyzable_mask, backend=emotion_backend, llm_options=llm_options)
     if "Emotion" not in df.columns:
         raise LayerOrderError("Layer 3 failed to populate 'Emotion' column")
 

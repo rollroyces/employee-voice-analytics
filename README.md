@@ -181,13 +181,15 @@ The pipeline runs in fixed order, each layer pinned to a schema contract:
 |---|---|---|---|---|
 | 0 | preprocess | `CleanComment` | (stdlib) | trivial |
 | 0.5 | privacy (PII redaction) | `CleanComment` (redacted) | regex: none; presidio: `[privacy]` extra + spaCy model | cheap |
-| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` (or fallback) | **ML** |
-| 2 | category | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` (or fallback) | **ML** |
-| 3 | emotion | `Emotion`, `EmotionScore` | `transformers`, `torch` (or fallback) | **ML** |
+| 1 | sentiment | `Sentiment`, `SentimentScore` | `transformers`, `torch` (or fallback) or hosted LLM (Azure OpenAI / OpenAI / Anthropic) | **ML** |
+| 2 | category | `Category1`, `Category1Score`, `Category2`, `Category2Score`, `AllCategories` | `transformers`, `torch` (or fallback) or hosted LLM | **ML** |
+| 3 | emotion | `Emotion`, `EmotionScore` | `transformers`, `torch` (or fallback) or hosted LLM | **ML** |
 | 4 | themes | `Topic`, `TopicName`, `TopicKeywords` | `sentence_transformers`, `bertopic`, `umap` (or TF-IDF + KMeans) | **ML** |
 | 5a | risk_score | `RiskScore`, `RiskBand`, `PushFactors`, `PullFactors` | (none; uses layer 1-3 outputs) | trivial |
 | 5b | risk_velocity | `RiskVelocity` | (none; null when `EmployeeID`/`SurveyDate` missing) | trivial |
 | 6 | llm_summary | (writes side files) | `openai` (optional) | external |
+
+For the LLM backend per layer, see [Hosted LLM backend (opt-in)](#hosted-llm-backend-opt-in).
 
 **Cost tier matters** because the medaillon split is built around it:
 
@@ -262,6 +264,114 @@ The fallback does **not** silently change column shapes — the contract columns
   have their verbatim comments blanked in the fact table; numeric
   score columns are preserved so aggregate dashboards still work.
   Configurable via `--k-anonymity` on `eva analyze`.
+
+## Hosted LLM backend (opt-in)
+
+The default backend for sentiment, category, and emotion classification
+is **local**: HuggingFace transformers (when installed) or the
+keyword/TF-IDF fallback (when `EMPLOYEE_VOICE_ALLOW_FALLBACK=1`).
+Local means offline, private, and on your hardware.
+
+If you need more accuracy and don't mind sending text to a third-party
+API, you can route any of those three layers through a hosted LLM
+instead. PII is **auto-redacted** (regex) before every send unless
+you pass `send_raw_text=True`.
+
+```python
+import employee_voice
+
+fact = employee_voice.analyze_feedback(
+    my_df,
+    sentiment_backend="llm",
+    category_backend="llm",
+    emotion_backend="llm",
+    llm_options={
+        "batch_size": 100,      # comments per LLM call (default 50)
+        "max_concurrent": 2,     # parallel HTTP requests (default 1)
+        "send_raw_text": False,  # PII auto-redacted (default)
+    },
+)
+```
+
+CLI:
+
+```bash
+employee-voice \
+    --input data/feedback.csv \
+    --outdir output \
+    --category-backend llm \
+    --emotion-backend llm \
+    --llm-batch-size 100
+```
+
+### Provider configuration
+
+Set one of these in the environment. The first match wins.
+
+| Provider | Env vars |
+|---|---|
+| Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` (default `gpt-4o-mini`), `AZURE_OPENAI_API_VERSION` (default `2024-08-01-preview`) |
+| OpenAI | `OPENAI_API_KEY` (uses `gpt-4o-mini` by default) |
+| Anthropic | `ANTHROPIC_API_KEY` (uses `claude-haiku-3-5-20241022` by default) |
+
+If a layer's backend is `"llm"` but no provider is configured, the
+CLI exits with code 3 and a clear error message.
+
+### Cost and speed (typical, 100k rows)
+
+| Backend | Time | Cost |
+|---|---|---|
+| Local HF (distilbert-mnli) | ~4 hours (single CPU) | $0 |
+| Local fallback (keyword) | ~1 minute (single CPU) | $0 |
+| **Hosted LLM (gpt-4o-mini)** | **~5 minutes (1 worker, batch 200)** | **~$2** |
+| Hosted LLM (gpt-4o-mini, 2 workers, batch 500) | ~3 minutes | ~$2 |
+
+Numbers are approximate. The bench harness
+(`benchmarks/bench_category_accuracy.py`) measures real accuracy and
+speed against your data.
+
+### Privacy — read this
+
+The LLM backend sends comment text to a third-party API. This is
+**unsafe for HR data** unless:
+
+- You have a BAA / data-processing agreement with the provider, OR
+- You run on Azure OpenAI with HR data isolated to a tenant with
+  data-residency controls, OR
+- Your HR team has explicitly approved this path.
+
+By default the regex PII scrubber runs on every comment before it's
+sent. The scrubber catches emails, phone numbers, SSN, employee IDs,
+and project codenames. It does NOT catch names (no NER). For
+higher-accuracy PII removal, install the `[privacy]` extra and pass
+`pii_backend="presidio"` to `analyze_feedback` — but note that the
+LLM backend always scrubs with the regex backend, not Presidio, for
+speed. If you need Presidio-scrubbed text sent to an LLM, scrub
+yourself first.
+
+`--send-raw-text` / `send_raw_text=True` bypasses the regex
+scrubber. The CLI prints a warning when this is set. **Do not use
+this in production for HR data.**
+
+### Prompts are versioned and overridable
+
+Prompts live in `prompts/<task>_v1.txt` and are loaded by
+`employee_voice.llm_backend.load_prompt()`. The category prompt uses
+`{category_list}` which is rendered from `config.CATEGORIES` so the
+prompt can't drift from the runtime taxonomy. The
+`test_prompt_includes_taxonomy` test enforces this.
+
+To override the prompt at call time:
+
+```python
+employee_voice.analyze_feedback(
+    my_df,
+    category_backend="llm",
+    llm_options={"prompt_version": "v2"},
+)
+```
+
+Authoring rules live in `prompts/README.md`.
 
 ## Databricks / PySpark
 

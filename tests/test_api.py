@@ -163,7 +163,7 @@ class TestAnalyzeFeedback:
         from unittest import mock
         layers.set_allow_fallback(True)
         try:
-            with mock.patch.object(layers, "run_sentiment", lambda df, mask: df):
+            with mock.patch.object(layers, "run_sentiment", lambda df, mask, **kw: df):
                 with pytest.raises((layers.LayerContractError, layers.LayerOrderError)):
                     analyze_feedback(self._df())
         finally:

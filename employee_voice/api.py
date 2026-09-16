@@ -84,6 +84,10 @@ def analyze_feedback(
     pii_backend: str = "regex",
     k_anonymity: Optional[int] = None,
     k_anonymity_group_by: Optional[Iterable[str]] = None,
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> pd.DataFrame:
     """
     Run the full pipeline on an in-memory DataFrame and return the
@@ -201,6 +205,10 @@ def analyze_feedback(
             outdir=tmp,
             run_topics=run_topics,
             run_summary_layer=run_summary,
+            sentiment_backend=sentiment_backend,
+            category_backend=category_backend,
+            emotion_backend=emotion_backend,
+            llm_options=llm_options,
         )
     out = layered["df"]
 
@@ -233,10 +241,18 @@ def analyze_file(
     k_anonymity: Optional[int] = None,
     k_anonymity_group_by: Optional[Iterable[str]] = None,
     run_summary: bool = False,
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> dict:
     """
     Run the full pipeline on a file (CSV / XLSX / JSON / Parquet) and
     write the four standard artifacts to `outdir`.
+
+    Per-layer backend: pass `sentiment_backend="llm"` (etc.) to route
+    that layer through a hosted LLM. PII is auto-scrubbed before any
+    LLM call unless `llm_options={"send_raw_text": True}`.
 
     Returns
     -------
@@ -271,6 +287,10 @@ def analyze_file(
         pii_backend=pii_backend,
         k_anonymity=k_anonymity,
         k_anonymity_group_by=k_anonymity_group_by,
+        sentiment_backend=sentiment_backend,
+        category_backend=category_backend,
+        emotion_backend=emotion_backend,
+        llm_options=llm_options,
     )
 
     os.makedirs(outdir, exist_ok=True)
@@ -385,6 +405,10 @@ def analyze_medallion(
     pii_backend: str = "regex",
     k_anonymity: Optional[int] = None,
     k_anonymity_group_by: Optional[Iterable[str]] = None,
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> dict:
     """
     Run the full pipeline as three explicit stages (Bronze / Silver
@@ -395,6 +419,12 @@ def analyze_medallion(
     curated analytics layer, and `gold` to the BI mart. The Silver
     table can also be re-scored into Gold without re-running
     sentiment inference, which is the operational win.
+
+    Per-layer LLM backend: pass `sentiment_backend="llm"` (or
+    `category_backend="llm"`, `emotion_backend="llm"`) to route that
+    layer through Azure OpenAI / OpenAI / Anthropic instead of the
+    local HF / fallback engines. PII is auto-scrubbed before any LLM
+    call unless `llm_options={"send_raw_text": True}`.
 
     Returns
     -------
@@ -419,6 +449,10 @@ def analyze_medallion(
         pii_backend=pii_backend,
         k_anonymity=k_anonymity,
         k_anonymity_group_by=k_anonymity_group_by,
+        sentiment_backend=sentiment_backend,
+        category_backend=category_backend,
+        emotion_backend=emotion_backend,
+        llm_options=llm_options,
     )
 
 

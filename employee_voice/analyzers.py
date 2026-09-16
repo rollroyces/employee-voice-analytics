@@ -476,3 +476,186 @@ def score_risk(
             band = label
             break
     return round(float(score), 2), band
+
+
+
+# ---------------------------------------------------------------------------
+# Hosted LLM backends (opt-in). The HF / fallback paths above are the
+# default. The functions below are picked by run_all_layers when the
+# user passes `category_backend="llm"`, etc. Same DataFrame-out contract.
+# ---------------------------------------------------------------------------
+
+def analyze_sentiment_llm(
+    texts: List[str],
+    *,
+    batch_size: int = 50,
+    max_concurrent: int = 1,
+    send_raw_text: bool = False,
+    model: Optional[str] = None,
+    prompt_version: str = "v1",
+) -> pd.DataFrame:
+    """Run sentiment analysis via a hosted LLM (Azure OpenAI / OpenAI / Anthropic).
+
+    Auto-scrubs PII unless `send_raw_text=True`. Raises RuntimeError if no
+    provider is configured.
+
+    Returns DataFrame with columns Sentiment, SentimentScore (same contract
+    as the HF / fallback paths).
+    """
+    from . import llm_backend
+    if not texts:
+        return pd.DataFrame(columns=["Sentiment", "SentimentScore"])
+
+    raw = llm_backend.batched_classify(
+        list(texts),
+        task="sentiment",
+        batch_size=batch_size,
+        max_concurrent=max_concurrent,
+        send_raw_text=send_raw_text,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    rows = []
+    for item in raw:
+        label = str(item.get("label", "neutral")).lower()
+        if "pos" in label:
+            label = "positive"
+        elif "neg" in label:
+            label = "negative"
+        else:
+            label = "neutral"
+        score = float(item.get("score", 0.5))
+        score = max(0.0, min(1.0, score))
+        rows.append((label, score))
+    return pd.DataFrame(rows, columns=["Sentiment", "SentimentScore"])
+
+
+def analyze_category_llm(
+    texts: List[str],
+    *,
+    batch_size: int = 50,
+    max_concurrent: int = 1,
+    send_raw_text: bool = False,
+    model: Optional[str] = None,
+    prompt_version: str = "v1",
+) -> pd.DataFrame:
+    """Run category classification via a hosted LLM.
+
+    Returns DataFrame with columns Category1, Category1Score, Category2,
+    Category2Score, AllCategories (same contract as the HF path).
+    """
+    from . import llm_backend
+    from .config import CATEGORIES  # type: ignore
+
+    if not texts:
+        return pd.DataFrame(
+            columns=["Category1", "Category1Score", "Category2",
+                     "Category2Score", "AllCategories"]
+        )
+
+    raw = llm_backend.batched_classify(
+        list(texts),
+        task="category",
+        batch_size=batch_size,
+        max_concurrent=max_concurrent,
+        send_raw_text=send_raw_text,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    valid = set(CATEGORIES) | {"Other"}
+
+    def _norm(cat: str) -> str:
+        cat = (cat or "").strip()
+        # Direct match
+        if cat in valid:
+            return cat
+        # Common aliases
+        aliases = {
+            "compensation": "Compensation and Benefits",
+            "pay": "Compensation and Benefits",
+            "salary": "Compensation and Benefits",
+            "manager": "Management and Leadership",
+            "leadership": "Management and Leadership",
+            "career": "Career Development and Growth",
+            "growth": "Career Development and Growth",
+            "promotion": "Career Development and Growth",
+            "wlb": "Work-Life Balance",
+            "balance": "Work-Life Balance",
+            "flexibility": "Work-Life Balance",
+            "team": "Team and Collaboration",
+            "culture": "Culture and Values",
+            "values": "Culture and Values",
+            "tool": "Tools and Infrastructure",
+            "tools": "Tools and Infrastructure",
+            "recognition": "Recognition and Feedback",
+            "feedback": "Recognition and Feedback",
+        }
+        canon = aliases.get(cat.lower())
+        if canon and canon in valid:
+            return canon
+        # Try fuzzy substring, preferring the longest match so e.g.
+        # "Management and Leadership" beats a partial hit on
+        # "Leadership".
+        best = None
+        cat_low = cat.lower()
+        for v in sorted(valid, key=len, reverse=True):
+            v_low = v.lower()
+            if v_low in cat_low or cat_low in v_low:
+                if best is None or len(v) > len(best):
+                    best = v
+        if best is not None:
+            return best
+        return "Other"
+
+    rows = []
+    for item in raw:
+        c1 = _norm(item.get("category", "Other"))
+        sec_raw = item.get("secondary")
+        c2 = _norm(sec_raw) if sec_raw else ""
+        score = float(item.get("score", 0.6))
+        score = max(0.0, min(1.0, score))
+        all_cats = f"{c1}({score:.2f})"
+        if c2 and c2 != c1 and c2 != "Other":
+            all_cats += f" | {c2}({score * 0.8:.2f})"
+        rows.append({
+            "Category1": c1, "Category1Score": score,
+            "Category2": c2, "Category2Score": score * 0.8 if c2 else 0.0,
+            "AllCategories": all_cats,
+        })
+    return pd.DataFrame(rows)
+
+
+def analyze_emotion_llm(
+    texts: List[str],
+    *,
+    batch_size: int = 50,
+    max_concurrent: int = 1,
+    send_raw_text: bool = False,
+    model: Optional[str] = None,
+    prompt_version: str = "v1",
+) -> pd.DataFrame:
+    """Run emotion classification via a hosted LLM.
+
+    Returns DataFrame with columns Emotion, EmotionScore (same contract
+    as the HF path).
+    """
+    from . import llm_backend
+    if not texts:
+        return pd.DataFrame(columns=["Emotion", "EmotionScore"])
+
+    raw = llm_backend.batched_classify(
+        list(texts),
+        task="emotion",
+        batch_size=batch_size,
+        max_concurrent=max_concurrent,
+        send_raw_text=send_raw_text,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    rows = []
+    for item in raw:
+        label = str(item.get("label", "neutral")).lower()
+        score = float(item.get("score", 0.5))
+        score = max(0.0, min(1.0, score))
+        rows.append((label, score))
+    return pd.DataFrame(rows, columns=["Emotion", "EmotionScore"])

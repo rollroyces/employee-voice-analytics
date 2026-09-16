@@ -150,7 +150,7 @@ class TestRunAllLayers:
         layers.set_allow_fallback(True)
         try:
             with mock.patch.object(layers, "run_sentiment",
-                                   side_effect=lambda df, mask: df):  # noqa: ARG005
+                                   side_effect=lambda df, mask, **kw: df):  # noqa: ARG005
                 with pytest.raises((layers.LayerContractError, layers.LayerOrderError)) as ei:
                     layers.run_all_layers(self._df(10))
             assert ("Sentiment" in str(ei.value)
@@ -165,8 +165,9 @@ class TestRunAllLayers:
         layers.set_allow_fallback(True)
         try:
             with mock.patch.object(layers, "run_category",
-                                   side_effect=lambda df, mask: df.drop(columns=["Category1"])
-                                   if "Category1" in df.columns else df):
+                                   side_effect=lambda df, mask, **kw:
+                                       df.drop(columns=["Category1"])
+                                       if "Category1" in df.columns else df):
                 with pytest.raises((layers.LayerContractError, layers.LayerOrderError)):
                     layers.run_all_layers(self._df(10))
         finally:

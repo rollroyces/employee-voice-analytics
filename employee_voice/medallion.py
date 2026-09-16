@@ -149,6 +149,10 @@ def transform_silver(
     run_topics: bool = True,
     redact: bool = False,
     pii_backend: str = "regex",
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Silver stage. Run Layers 0-4 (preprocess + sentiment + category
@@ -159,6 +163,11 @@ def transform_silver(
     redacted text. The original verbatim is preserved as
     `Comment_raw` for audit (and dropped by the Gold stage's
     privacy filter).
+
+    Per-layer backend: pass `sentiment_backend="llm"` (etc.) to route
+    that layer through a hosted LLM (Azure OpenAI / OpenAI / Anthropic).
+    PII is auto-scrubbed before any LLM call unless
+    `llm_options={"send_raw_text": True}`.
 
     Returns:
         (silver_df, layered_meta)
@@ -188,9 +197,9 @@ def transform_silver(
     df, is_non_answer, is_short = run_preprocess(work)
     analyzable_mask = (~is_non_answer) & (~is_short)
 
-    df = run_sentiment(df, analyzable_mask)
-    df = run_category(df, analyzable_mask)
-    df = run_emotion(df, analyzable_mask)
+    df = run_sentiment(df, analyzable_mask, backend=sentiment_backend, llm_options=llm_options)
+    df = run_category(df, analyzable_mask, backend=category_backend, llm_options=llm_options)
+    df = run_emotion(df, analyzable_mask, backend=emotion_backend, llm_options=llm_options)
 
     topic_meta: dict = {}
     if run_topics:
@@ -289,6 +298,10 @@ def analyze_medallion(
     pii_backend: str = "regex",
     k_anonymity: Optional[int] = None,
     k_anonymity_group_by: Optional[Iterable[str]] = None,
+    sentiment_backend: str = "auto",
+    category_backend: str = "auto",
+    emotion_backend: str = "auto",
+    llm_options: Optional[dict] = None,
 ) -> dict:
     """
     Run the full Bronze -> Silver -> Gold pipeline and return all
@@ -302,6 +315,10 @@ def analyze_medallion(
     bronze = ingest_bronze(df, text_column=text_column)
     silver, silver_meta = transform_silver(
         bronze, run_topics=run_topics, redact=redact, pii_backend=pii_backend,
+        sentiment_backend=sentiment_backend,
+        category_backend=category_backend,
+        emotion_backend=emotion_backend,
+        llm_options=llm_options,
     )
     gold, gold_meta = score_gold(
         silver,

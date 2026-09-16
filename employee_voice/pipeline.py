@@ -111,7 +111,12 @@ def run(input_path: str,
         outdir: str,
         sheet: Optional[str] = None,
         text_column: Optional[str] = None,
-        run_topics: bool = True) -> dict:
+        run_topics: bool = True,
+        *,
+        sentiment_backend: str = "auto",
+        category_backend: str = "auto",
+        emotion_backend: str = "auto",
+        llm_options: Optional[dict] = None) -> dict:
     """End-to-end. Returns the artifacts dict so callers can inspect results."""
     os.makedirs(outdir, exist_ok=True)
     raw = _read_input(input_path, sheet=sheet, text_column=text_column)
@@ -157,6 +162,10 @@ def run(input_path: str,
         outdir=outdir,
         run_topics=run_topics,
         run_summary_layer=False,  # CLI handles Layer 6 separately
+        sentiment_backend=sentiment_backend,
+        category_backend=category_backend,
+        emotion_backend=emotion_backend,
+        llm_options=llm_options,
     )
     out = layered["df"]
     meta = layered["topic_meta"]
