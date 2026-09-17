@@ -5,6 +5,18 @@ These are the system prompts the `llm` backend sends to a hosted LLM
 **versioned**: the loader looks for `prompts/<task>_<version>.txt`
 (e.g. `prompts/category_v1.txt`).
 
+## Available versions
+
+| file | version | when to use |
+|---|---|---|
+| `category_v1.txt` | v1 | Default. 3 hand-written few-shot examples covering 3 categories. Works but the LLM has to guess for the other 15 categories. |
+| `category_v2.txt` | v2 | Static balanced 18-example pool (one per category from `EXEMPLARS`). Every category is shown at least once in the prompt. Strict improvement over v1. |
+| `category_v2.txt` + `exemplar_query=<batch[0]>` | v2-retrieved | Same prompt template, but the few-shot block is replaced with the K most similar exemplars from the pool for each batch's first comment. **Best expected accuracy on diverse inputs**, at the cost of slightly larger prompts and per-batch prompt assembly. |
+
+The LLM backend auto-uses retrieval for `category` tasks at v2+
+(`batched_classify(... prompt_version="v2")`). Pass `prompt_version="v1"`
+or `"v2"` without a query to get the static block.
+
 ## Why versioned
 
 LLM outputs drift when you change the prompt. By keeping each
@@ -17,14 +29,20 @@ version in a file under git, you can:
 
 ## Placeholders
 
-`prompts/category_v1.txt` uses `{category_list}`, which `load_prompt`
-substitutes from `employee_voice.config.CATEGORIES` at load time.
-This means if you edit `CATEGORIES` in `config.py`, the prompt
-updates automatically — no risk of the prompt and the
-post-processing taxonomy drifting apart.
+Both prompt files use `{category_list}` and `{exemplar_block}`:
 
-The category-prompt test `tests/test_llm_backend.py::test_prompt_includes_taxonomy`
-asserts every category in `CATEGORIES` is mentioned in the prompt.
+- `{category_list}` is rendered from `employee_voice.config.CATEGORIES`
+  so the prompt can't drift from the runtime taxonomy.
+- `{exemplar_block}` is rendered from `employee_voice.exemplars`:
+  - If `exemplar_query` is provided (set automatically by the LLM
+    backend for category v2+), the block contains the K exemplars
+    most similar to the query.
+  - Otherwise the block contains a balanced 18-exemplar subset of
+    the curated `EXEMPLARS` pool (one per category).
+
+The `test_prompt_includes_taxonomy` test asserts every category in
+`CATEGORIES` is mentioned in the rendered category prompt, which
+guards against drift between `config.py` and the exemplar pool.
 
 ## Authoring a new version
 

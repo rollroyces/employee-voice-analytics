@@ -355,11 +355,21 @@ this in production for HR data.**
 
 ### Prompts are versioned and overridable
 
-Prompts live in `prompts/<task>_v1.txt` and are loaded by
-`employee_voice.llm_backend.load_prompt()`. The category prompt uses
-`{category_list}` which is rendered from `config.CATEGORIES` so the
-prompt can't drift from the runtime taxonomy. The
-`test_prompt_includes_taxonomy` test enforces this.
+Prompts live in `prompts/<task>_<version>.txt` and are loaded by
+`employee_voice.llm_backend.load_prompt()`. Available versions:
+
+| version | content | when to use |
+|---|---|---|
+| `v1` | 3 hand-written few-shot examples | Default. Works but the LLM has to guess for 15 of the 18 categories. |
+| `v2` | Static balanced 18-exemplar pool (one per category from `EXEMPLARS`) | Better default. Every category is shown at least once. |
+| `v2` + retrieval | Same template; the few-shot block is dynamically replaced with the top-K most similar exemplars from the pool | Best expected accuracy on diverse inputs. Auto-enabled by `batched_classify` for `task="category"` at v2+. |
+
+The category prompt uses `{category_list}` (rendered from
+`config.CATEGORIES`) and `{exemplar_block}` (rendered from
+`employee_voice.exemplars.EXEMPLARS`). Both are substituted at load
+time so the prompt can't drift from the runtime taxonomy or
+exemplar pool. `test_prompt_includes_taxonomy` enforces the
+taxonomy check.
 
 To override the prompt at call time:
 

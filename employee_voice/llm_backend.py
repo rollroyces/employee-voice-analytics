@@ -87,19 +87,29 @@ def detect_provider() -> Optional[Provider]:
 _PROMPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
 
 
-def load_prompt(name: str, version: str = "v1") -> str:
+def load_prompt(name: str, version: str = "v1", *,
+            exemplar_query: Optional[str] = None,
+            exemplar_k: Optional[int] = None) -> str:
     """Load a versioned prompt file from prompts/<name>_<version>.txt.
 
     Falls back to <name>_v1.txt if version not found. Raises FileNotFoundError
     if neither exists.
 
     Prompt files may use these placeholders, which are substituted from
-    `employee_voice.config`:
+    `employee_voice.config` and `employee_voice.exemplars`:
 
       {category_list}    rendered as a bullet list of the current HR
                          taxonomy (loaded from CATEGORIES). Used by
-                         prompts/category_v1.txt so the prompt can't
-                         drift from the runtime taxonomy.
+                         prompts/category_v{1,2}.txt so the prompt
+                         can't drift from the runtime taxonomy.
+      {exemplar_block}   rendered as a few-shot examples block. If
+                         `exemplar_query` is provided, the block
+                         contains the K exemplars most similar to the
+                         query (TF-IDF cosine). Otherwise the block
+                         contains a balanced 18-exemplar subset of
+                         the curated pool (one per category). Only
+                         meaningful for category prompts today;
+                         sentiment and emotion prompts don't use it.
     """
     fname = f"{name}_{version}.txt"
     path = os.path.join(_PROMPTS_DIR, fname)
@@ -108,17 +118,37 @@ def load_prompt(name: str, version: str = "v1") -> str:
         default = os.path.join(_PROMPTS_DIR, f"{name}_v1.txt")
         if os.path.exists(default):
             log.warning("prompt %s not found, falling back to %s_v1.txt", fname, name)
-            return _render(open(default).read())
+            return _render(open(default).read(),
+                           exemplar_query=exemplar_query, exemplar_k=exemplar_k)
         raise FileNotFoundError(f"prompt file not found: {path}")
-    return _render(open(path).read())
+    return _render(open(path).read(),
+                   exemplar_query=exemplar_query, exemplar_k=exemplar_k)
 
 
-def _render(template: str) -> str:
-    """Substitute documented placeholders in a prompt template."""
+def _render(template: str, *, exemplar_query: Optional[str] = None,
+            exemplar_k: Optional[int] = None) -> str:
+    """Substitute documented placeholders in a prompt template.
+
+    Args:
+      template: the raw template text.
+      exemplar_query: if set AND the template contains
+        `{exemplar_block}`, retrieve top-K exemplars from the
+        module-level pool for this query and format them.
+      exemplar_k: how many exemplars to retrieve (default 5).
+    """
     if "{category_list}" in template:
         from .config import CATEGORIES
         bullets = "\n".join(f"  - {c}" for c in CATEGORIES) + "\n  - Other"
         template = template.replace("{category_list}", bullets)
+    if "{exemplar_block}" in template:
+        from .exemplars import format_exemplars, format_retrieved
+        if exemplar_query is not None:
+            block = format_retrieved(exemplar_query, k=exemplar_k or 5)
+        else:
+            # Static balanced 18-exemplar set
+            block = format_exemplars(max_n=18)
+        # Always include something so the prompt stays well-formed.
+        template = template.replace("{exemplar_block}", block + "\n" if block else "")
     return template
 
 
@@ -402,18 +432,25 @@ def batched_classify(
     if model:
         provider = Provider(name=provider.name, deployment=model, api_version=provider.api_version)
 
-    system = load_prompt(task, version=prompt_version)
-
     # Scrub once up front so all downstream calls see the same data.
     if not send_raw_text:
         rows = [_scrub_text(r) for r in rows]
 
     results: List[Optional[dict]] = [None] * len(rows)
 
+    # Use retrieved exemplars only for category prompts at v2+.
+    use_retrieval = (
+        task == "category"
+        and prompt_version.startswith("v2")
+    )
+
     if max_concurrent <= 1:
         # Serial path (no thread pool needed).
         offset = 0
         for batch in chunk(rows, batch_size):
+            q = batch[0] if use_retrieval and batch else None
+            system = load_prompt(task, version=prompt_version,
+                                 exemplar_query=q)
             raw = (
                 _call_anthropic(provider, system, batch)
                 if provider.name == "anthropic"
@@ -430,6 +467,9 @@ def batched_classify(
         with ThreadPoolExecutor(max_workers=max_concurrent) as pool:
             futures = {}
             for i, batch in enumerate(batches):
+                q = batch[0] if use_retrieval and batch else None
+                system = load_prompt(task, version=prompt_version,
+                                     exemplar_query=q)
                 fn = _call_anthropic if provider.name == "anthropic" else _call_openai_compatible
                 futures[pool.submit(fn, provider, system, batch)] = i
             # Map result index -> first global index in `results`
