@@ -43,6 +43,7 @@ jobs:
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: bench-lexicon-1k
           path: /tmp/lexicon_1k.{md,csv}
 
@@ -71,6 +72,7 @@ jobs:
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: bench-hf-100
           path: benchmarks/results_hf.{md,csv}
       - name: Comment on PR
@@ -127,6 +129,7 @@ jobs:
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: bench-category-models
           path: benchmarks/results_category_models.{md,csv}
 
@@ -153,6 +156,7 @@ jobs:
       - name: Upload accuracy results
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: bench-accuracy
           path: benchmarks/results_category_accuracy.{md,csv}
 
@@ -180,6 +184,7 @@ jobs:
       - name: Upload smoke results
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: bench-smoke
           path: benchmarks/results_category_models.{md,csv}
 
