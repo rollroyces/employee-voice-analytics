@@ -1,0 +1,59 @@
+cff-version: 1.2.0
+message: >-
+  If you use employee-voice-analytics in academic work, please cite it using
+  the metadata below. The toolkit runs as a local CLI or on Databricks Spark
+  over Bronze/Silver/Gold Delta tables.
+type: software
+title: "employee-voice-analytics"
+license: AGPL-3.0-or-later
+license-url: https://github.com/rollroyces/employee-voice-analytics/blob/main/LICENSE
+url: "https://github.com/rollroyces/employee-voice-analytics"
+repository-code: "https://github.com/rollroyces/employee-voice-analytics"
+keywords:
+  - nlp
+  - hr-analytics
+  - sentiment-analysis
+  - bertopic
+  - keybert
+  - goemotions
+  - privacy
+  - databricks
+  - employee-voice
+authors:
+  - family-names: "Lam"
+    given-names: "Royce"
+    alias: "rollroyces"
+    orcid: "https://orcid.org/0009-0008-9113-769X"
+    affiliation: "Independent Researcher (no institutional affiliation; verified email domain umich.edu)"
+    email: "roycelam@umich.edu"
+# No `doi:`, `version` or `date-released` key yet, deliberately.
+#
+# This repository has never been released and has never been archived, so
+# there is nothing to point a DOI at. A placeholder string under `doi:`
+# would render in GitHub's "Cite this repository" box as a link to a
+# record that does not exist.
+#
+# To complete it:
+#   1. Enable this repository in the Zenodo GitHub integration
+#      (https://zenodo.org/settings/github) — one toggle per repo.
+#   2. Publish a first GitHub release (e.g. v0.1.0). Zenodo archives the
+#      tag's tree and mints a version DOI plus a concept DOI.
+#   3. Copy the version DOI into `doi:`, the concept DOI into
+#      `identifiers:`, and the tag's version and date into `version` and
+#      `date-released`, then open the next release.
+#
+# The ORCID iD above is what makes the DOI bind to your identity: DataCite
+# carries it into the record's nameIdentifiers, and ORCID auto-adds the
+# DOI to your works list. The pattern is already proven on
+# rollroyces/deepcatch (concept DOI 10.5281/zenodo.24453043, version DOI
+# 10.5281/zenodo.24453044).
+preferred-citation:
+  type: software
+  title: "employee-voice-analytics: a dual-runtime HR-NLP toolkit for employee-feedback sentiment, theme and attrition-risk signals"
+  authors:
+    - family-names: "Lam"
+      given-names: "Royce"
+      alias: "rollroyces"
+      orcid: "https://orcid.org/0009-0008-9113-769X"
+  year: 2026
+  url: "https://github.com/rollroyces/employee-voice-analytics"
