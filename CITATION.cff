@@ -21,7 +21,7 @@ keywords:
   - employee-voice
 authors:
   - family-names: "Lam"
-    given-names: "Royce"
+    given-names: "Yu Ching"
     alias: "rollroyces"
     orcid: "https://orcid.org/0009-0008-9113-769X"
     affiliation: "Independent Researcher (no institutional affiliation; verified email domain umich.edu)"
@@ -42,7 +42,16 @@ authors:
 #      `identifiers:`, and the tag's version and date into `version` and
 #      `date-released`, then open the next release.
 #
-# The ORCID iD above is what makes the DOI bind to your identity: DataCite
+# The author name here is "Yu Ching Lam" — the name on the ORCID record
+# (0009-0008-9113-769X) and the creator form used by the deepcatch DOI
+# (10.5281/zenodo.24453044). It is deliberately not "Royce Lam": a Zenodo
+# record's creator name is the string Google Scholar matches on, so the
+# DOI portfolio has to agree with the ORCID name string or the works split
+# across two Scholar profiles. "Royce Lam" is the public-facing name on
+# GitHub, PyPI and LinkedIn; it belongs in the ORCID record's "also known
+# as" field, which is where the equivalence becomes machine-readable.
+#
+# The ORCID iD above is what binds the DOI to your identity: DataCite
 # carries it into the record's nameIdentifiers, and ORCID auto-adds the
 # DOI to your works list. The pattern is already proven on
 # rollroyces/deepcatch (concept DOI 10.5281/zenodo.24453043, version DOI
@@ -52,7 +61,7 @@ preferred-citation:
   title: "employee-voice-analytics: a dual-runtime HR-NLP toolkit for employee-feedback sentiment, theme and attrition-risk signals"
   authors:
     - family-names: "Lam"
-      given-names: "Royce"
+      given-names: "Yu Ching"
       alias: "rollroyces"
       orcid: "https://orcid.org/0009-0008-9113-769X"
   year: 2026
